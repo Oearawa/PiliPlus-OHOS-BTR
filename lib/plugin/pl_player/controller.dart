@@ -36,7 +36,10 @@ import 'package:PiliPlus/plugin/pl_player/models/video_fit_type.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/danmaku_options.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/fullscreen.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/player_rebuild_queue.dart';
+import 'package:PiliPlus/plugin/pl_player/utils/ripper_feedback.dart';
 import 'package:PiliPlus/services/service_locator.dart';
+import 'package:PiliPlus/services/thread_ripper/player_bridge.dart';
+import 'package:PiliPlus/services/thread_ripper/prefs.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/android/bindings.g.dart';
 import 'package:PiliPlus/utils/asset_utils.dart';
@@ -573,6 +576,21 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   /// 当前播放源的画质，用于判断是否为 HDR 片源。由 [setDataSource] 传入。
   VideoQuality? _hdrQuality;
 
+  /// BTR 当前会话令牌；旧 source 的缓冲/卡顿回调不得污染新会话。
+  int _ripperSessionId = 0;
+  int _lastRipperPositionMs = 0;
+
+  /// Coalesces async `demuxer-cache-idle` reads for BTR. The media_kit OHOS
+  /// fork exposes NativePlayer.getProperty as Future<String>; position events
+  /// must not issue one unthrottled mpv round-trip per frame.
+  final RipperCacheFullProbe _ripperCacheFullProbe = RipperCacheFullProbe();
+
+  /// Suppresses stall reporting only while a user seek/source reopen settles.
+  final RipperRestartGuard _ripperRestartGuard = RipperRestartGuard();
+  Timer? _ripperRestartWatchdog;
+  int _ripperRestartGeneration = 0;
+  int _ripperListenerEpoch = 0;
+
   /// 鸿蒙上现在需要的视频输出，规则见 [OhosHdrOutput.output]；其他平台为 null。
   ///
   /// 平台视图没有单独的开关：关掉它等于关掉 HDR（元数据会在 Flutter 纹理那一步
@@ -872,6 +890,92 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   bool _processing = false;
   bool get processing => _processing;
 
+  /// Arms the BTR transition guard before a source open or seek can emit its
+  /// first buffering event.
+  ///
+  /// The primary release is `buffering == false`. The watchdog is the last
+  /// resort because media_kit offers no bounded "restart finished" future: a
+  /// disposed player or a failed source may never emit either event. Ten
+  /// seconds is longer than a normal local transition and matches the
+  /// controller's existing ten-second probe window; it is released early by
+  /// every normal event.
+  void _beginRipperRestart() {
+    if (_ripperSessionId == 0 ||
+        RipperPlayerBridge.instance.autoConcurrency == null) {
+      return;
+    }
+    _ripperCacheFullProbe.invalidate();
+    _ripperRestartGuard.begin(alreadyBuffering: isBuffering.value);
+    _ripperRestartWatchdog?.cancel();
+    final int generation = ++_ripperRestartGeneration;
+    _ripperRestartWatchdog = Timer(const Duration(seconds: 10), () {
+      if (generation != _ripperRestartGeneration) return;
+      _ripperRestartGuard.expire();
+      _ripperRestartWatchdog = null;
+    });
+  }
+
+  void _clearRipperRestart() {
+    _ripperRestartGeneration += 1;
+    _ripperRestartWatchdog?.cancel();
+    _ripperRestartWatchdog = null;
+    _ripperRestartGuard.clear();
+  }
+
+  void _resetRipperFeedbackForSource() {
+    // Invalidate callbacks from the previous NativePlayer before a new source's
+    // listeners are installed.
+    _ripperListenerEpoch += 1;
+    _ripperCacheFullProbe.invalidate();
+    _clearRipperRestart();
+  }
+
+  /// Reads `demuxer-cache-idle` at a bounded rate. mpv defines this property as
+  /// "the demuxer cache is filled to the requested amount and is currently not
+  /// reading more data"; unknown/empty/failed reads mean false.
+  void _refreshRipperCacheFull(int session) {
+    if (session == 0 || RipperPlayerBridge.instance.autoConcurrency == null) {
+      return;
+    }
+    final int? token = _ripperCacheFullProbe.begin(session: session);
+    if (token == null) return;
+
+    NativePlayer? nativePlayer;
+    try {
+      nativePlayer = _videoPlayerController?.platform?.maybeAsNativePlayer;
+    } on Object {
+      nativePlayer = null;
+    }
+    if (nativePlayer == null) {
+      _ripperCacheFullProbe.fail(token, session: session);
+      return;
+    }
+
+    // A local mpv property read should be immediate. The timeout is a
+    // liveness guard, not a playback deadline: if the NativePlayer is disposed
+    // or never finishes initialization, inFlight must not stay true forever.
+    unawaited(
+      nativePlayer
+          .getProperty('demuxer-cache-idle')
+          .timeout(const Duration(seconds: 2))
+          .then(
+            (String value) {
+              if (_ripperSessionId != session) return;
+              _ripperCacheFullProbe.complete(
+                token,
+                session: session,
+                value: value,
+              );
+            },
+            onError: (Object _) {
+              if (_ripperSessionId == session) {
+                _ripperCacheFullProbe.fail(token, session: session);
+              }
+            },
+          ),
+    );
+  }
+
   // offline
   bool get isFileSource => dataSource is FileSource;
 
@@ -963,6 +1067,13 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     // 当前片源画质，用于判断是否需要按 HDR 输出
     VideoQuality? quality,
   }) async {
+    // BTR-BEGIN
+    // A new source always starts a new download session.
+    _ripperSessionId = 0;
+    _lastRipperPositionMs = 0;
+    _resetRipperFeedbackForSource();
+    await RipperPlayerBridge.instance.close();
+    // BTR-END
     try {
       _processing = true;
       this.isLive = isLive;
@@ -1025,6 +1136,11 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       await _initializePlayer();
       onInit?.call();
     } catch (err, stackTrace) {
+      // A failed/open-cancelled player must not leave a restart guard, a cache
+      // probe, or a proxy session that never became active.
+      _ripperSessionId = 0;
+      _resetRipperFeedbackForSource();
+      unawaited(RipperPlayerBridge.instance.close());
       dataStatus.value = DataStatus.error;
       if (kDebugMode) {
         debugPrint(stackTrace.toString());
@@ -1158,6 +1274,9 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     // 渲染路径重建是同一个片源接着播，屏上的弹幕和心跳进度都要留着
     bool isRebuild = false,
   }) async {
+    // A render-path rebuild creates a new NativePlayer too; old async property
+    // reads and the old transition guard must not survive into it.
+    _resetRipperFeedbackForSource();
     isBuffering.value = false;
     if (!isRebuild) {
       _heartDuration = 0;
@@ -1206,7 +1325,44 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     }
 
     String video = dataSource.videoSource;
-    if (dataSource.audioSource case final audio? when (audio.isNotEmpty)) {
+    // BTR-BEGIN
+    // When the switch is on and the caller supplied candidates, the media URL
+    // becomes a loopback one. Any failure falls back to the direct source.
+    String? btrAudioSource = dataSource.audioSource;
+    if (RipperPrefs.enabled &&
+        dataSource is NetworkSource &&
+        dataSource.videoCandidates?.isNotEmpty == true) {
+      try {
+        final bool started = await RipperPlayerBridge.instance.open(
+          videoUrls: dataSource.videoCandidates!.map(Uri.parse).toList(),
+          audioUrls: (dataSource.audioCandidates ?? const <String>[])
+              .map(Uri.parse)
+              .toList(),
+          settings: RipperPrefs.currentSettings,
+          mode: RipperPrefs.mode,
+          customHosts: RipperPrefs.customHosts,
+          userAgent: BrowserUa.pc,
+          media: dataSource.ripperMedia,
+          auto: dataSource.ripperAutoConcurrency,
+        );
+        if (started) {
+          _ripperSessionId = RipperPlayerBridge.instance.sessionId;
+          video = RipperPlayerBridge.instance.proxiedVideoUrl;
+          if (dataSource.audioCandidates?.isNotEmpty == true &&
+              RipperPlayerBridge.instance.proxiedAudioUrl.isNotEmpty) {
+            btrAudioSource = RipperPlayerBridge.instance.proxiedAudioUrl;
+          }
+        } else {
+          _ripperSessionId = 0;
+        }
+      } on Object {
+        // The accelerator must never break playback.
+        _ripperSessionId = 0;
+        await RipperPlayerBridge.instance.close();
+      }
+    }
+    // BTR-END
+    if (btrAudioSource case final audio? when (audio.isNotEmpty)) {
       if (onlyPlayAudio.value) {
         video = audio;
       } else {
@@ -1231,6 +1387,9 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     }
 
     assert(!isLive || seekTo == null);
+    // Arm before open(): media_kit may emit buffering while open() is still
+    // awaiting, before the first position event reaches this controller.
+    _beginRipperRestart();
     await player.open(
       Media(
         video,
@@ -1258,13 +1417,26 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       return false;
     }
     String? audioUri;
+    // BTR-BEGIN
+    // A refresh keeps the running proxy session; if it was closed, the direct
+    // source is used again.
+    String sourceVideo = dataSource.videoSource;
+    String? sourceAudio = dataSource.audioSource;
+    if (RipperPlayerBridge.instance.isActive) {
+      final String proxiedVideo =
+          RipperPlayerBridge.instance.proxiedVideoUrl;
+      if (proxiedVideo.isNotEmpty) sourceVideo = proxiedVideo;
+      final String proxiedAudio = RipperPlayerBridge.instance.proxiedAudioUrl;
+      if (proxiedAudio.isNotEmpty) sourceAudio = proxiedAudio;
+    }
+    // BTR-END
     if (!isLive) {
-      if (dataSource.audioSource.isNullOrEmpty) {
+      if (sourceAudio.isNullOrEmpty) {
         SmartDialog.showToast('音频源为空');
       } else {
         audioUri = Platform.isWindows
-            ? dataSource.audioSource!.replaceAll(';', '\\;')
-            : dataSource.audioSource!.replaceAll(':', '\\:');
+            ? sourceAudio!.replaceAll(';', '\\;')
+            : sourceAudio!.replaceAll(':', '\\:');
         await (_videoPlayerController!.platform!).maybeAsNativePlayer
             .setProperty('audio-files', audioUri);
       }
@@ -1276,14 +1448,24 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
         '',
       );
     }
-    await _videoPlayerController!.open(
-      Media(
-        dataSource.videoSource,
-        start: isLive ? null : Duration(milliseconds: positionInMilliseconds),
-        extras: audioUri == null ? null : {'audio-files': '"$audioUri"'},
-      ),
-      play: true,
-    );
+    // Reopening the same source is a transition too; guard its first
+    // buffering event exactly like a user seek.
+    _beginRipperRestart();
+    try {
+      await _videoPlayerController!.open(
+        Media(
+          sourceVideo,
+          start: isLive
+              ? null
+              : Duration(milliseconds: positionInMilliseconds),
+          extras: audioUri == null ? null : {'audio-files': '"$audioUri"'},
+        ),
+        play: true,
+      );
+    } catch (_) {
+      _clearRipperRestart();
+      rethrow;
+    }
     return true;
     // seekTo(currentPos);
   }
@@ -1345,6 +1527,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   /// 播放事件监听
   void _startListeners(NativePlayer player) {
     assert(_subscriptions == null);
+    final int listenerEpoch = ++_ripperListenerEpoch;
     if (OS.isHarmony) {
       _startStallWatchdog();
       Floating().onPipAction = _onPipAction;
@@ -1447,6 +1630,39 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       /// position
       stream.position.listen((Duration position) {
         final posInSeconds = position.inSeconds;
+        // BTR-BEGIN
+        final bool btrCurrent = listenerEpoch == _ripperListenerEpoch;
+        if (btrCurrent) {
+          final int positionMs = position.inMilliseconds;
+          if (_ripperSessionId != 0 && _lastRipperPositionMs > 0) {
+            final int jump =
+                (positionMs - _lastRipperPositionMs).abs();
+            if (jump > 2500) {
+              RipperPlayerBridge.instance.onSeek(session: _ripperSessionId);
+            }
+          }
+          _lastRipperPositionMs = positionMs;
+          if (_ripperSessionId != 0) {
+            // Cache status is safe to refresh during a transition; only the
+            // consuming buffer/stall feedback is suppressed by the guard.
+            _refreshRipperCacheFull(_ripperSessionId);
+          }
+          if (!_ripperRestartGuard.active &&
+              position > Duration.zero &&
+              playerStatus.isPlaying &&
+              _ripperSessionId != 0) {
+            final int bufferedMs =
+                _videoPlayerController?.state.buffer.inMilliseconds ?? 0;
+            RipperPlayerBridge.instance.onBuffer(
+              (bufferedMs - positionMs) / 1000.0,
+              true,
+              cacheFull: _ripperCacheFullProbe.cacheFull,
+              waiting: isBuffering.value,
+              session: _ripperSessionId,
+            );
+          }
+        }
+        // BTR-END
 
         if (posInSeconds != this.position.value) {
           if (posInSeconds == 0 && playerStatus.isPlaying) {
@@ -1471,6 +1687,36 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       }),
       stream.buffering.listen((bool buffering) {
         isBuffering.value = buffering;
+        // BTR-BEGIN
+        // A seek/reopen buffering transition is not a stall. Suppress both
+        // stall() and the waiting buffer sample: either one can raise the
+        // adaptive limit while the player is still settling.
+        final bool btrCurrent = listenerEpoch == _ripperListenerEpoch;
+        if (btrCurrent && _ripperRestartGuard.active) {
+          _ripperRestartGuard.observeBuffering(buffering);
+        }
+        if (btrCurrent && _ripperSessionId != 0) {
+          _refreshRipperCacheFull(_ripperSessionId);
+        }
+        if (btrCurrent &&
+            !_ripperRestartGuard.active &&
+            buffering &&
+            playerStatus.isPlaying &&
+            position.value > 0) {
+          RipperPlayerBridge.instance.onStall(session: _ripperSessionId);
+          if (_ripperSessionId != 0) {
+            final int bufferedMs =
+                _videoPlayerController?.state.buffer.inMilliseconds ?? 0;
+            RipperPlayerBridge.instance.onBuffer(
+              (bufferedMs - positionInMilliseconds) / 1000.0,
+              true,
+              cacheFull: _ripperCacheFullProbe.cacheFull,
+              waiting: true,
+              session: _ripperSessionId,
+            );
+          }
+        }
+        // BTR-END
         if (!playerStatus.isCompleted) {
           _stopWakeLockTimer();
           _updatePlaybackState();
@@ -1497,6 +1743,24 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
           }
           return;
         }
+        // BTR-BEGIN
+        // Loopback failures close the session first: the retry then opens the
+        // direct CDN URL instead of the dead proxy URL.
+        if (listenerEpoch == _ripperListenerEpoch &&
+            event.startsWith('Failed to open http://127.0.0.1:')) {
+          // The proxy is dead; do not arm a restart guard for a session that
+          // no longer exists, and let the retry use the direct URL cleanly.
+          _ripperSessionId = 0;
+          _resetRipperFeedbackForSource();
+          unawaited(RipperPlayerBridge.instance.close());
+          EasyThrottle.throttle(
+            'controllerStream.error.btrProxy',
+            const Duration(seconds: 10),
+            () => Timer(const Duration(seconds: 3), refreshPlayer),
+          );
+          return;
+        }
+        // BTR-END
         if (event.startsWith("Failed to open https://") ||
             event.startsWith("Can not open external file https://") ||
             //tcp: ffurl_read returned 0xdfb9b0bb
@@ -1626,10 +1890,15 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       if (_playerCount == 0) return;
     }
     danmakuController?.clear();
+    // Arm before seek(): the seek command can produce a buffering event before
+    // the position stream reports the new target.
+    _beginRipperRestart();
     try {
       await _videoPlayerController?.seek(position);
       _updateIOSPip(position);
     } catch (e) {
+      // The seek did not start; do not leave stall detection disabled.
+      _clearRipperRestart();
       if (kDebugMode) debugPrint('seek failed: $e');
     }
   }
@@ -2314,6 +2583,13 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     }
 
     _playerCount = 0;
+    // BTR-BEGIN
+    // Only the last player page owns the session; a stacked player page must
+    // not stop the download of the one still playing.
+    _ripperSessionId = 0;
+    _resetRipperFeedbackForSource();
+    await RipperPlayerBridge.instance.close();
+    // BTR-END
     if (removeSafeArea) {
       showSystemBar();
     }

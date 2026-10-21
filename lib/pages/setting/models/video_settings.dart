@@ -6,6 +6,9 @@ import 'package:PiliPlus/models/common/video/live_quality.dart';
 import 'package:PiliPlus/models/common/video/video_decode_type.dart';
 import 'package:PiliPlus/models/common/video/video_quality.dart';
 import 'package:PiliPlus/pages/setting/models/model.dart';
+// BTR-BEGIN
+import 'package:PiliPlus/pages/setting/models/thread_ripper_settings.dart';
+// BTR-END
 import 'package:PiliPlus/pages/setting/widgets/hdr_settings_dialog.dart';
 import 'package:PiliPlus/pages/setting/widgets/ordered_multi_select_dialog.dart';
 import 'package:PiliPlus/pages/setting/widgets/select_dialog.dart';
@@ -192,6 +195,9 @@ List<SettingsModel> get videoSettings => [
         onTap: _showHdrSettingsDialog,
       ),
     ),
+  // BTR-BEGIN
+  ...threadRipperSettings,
+  // BTR-END
 ];
 
 /// HDR峰值亮度设置

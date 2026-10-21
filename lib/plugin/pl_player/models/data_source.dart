@@ -1,5 +1,6 @@
 import 'dart:io' show File;
 
+import 'package:PiliPlus/services/thread_ripper/media_demand.dart';
 import 'package:PiliPlus/utils/path_utils.dart';
 import 'package:path/path.dart' as path;
 
@@ -29,7 +30,27 @@ class NetworkSource extends DataSource {
   NetworkSource({
     required super.videoSource,
     required super.audioSource,
+    // BTR-BEGIN
+    this.videoCandidates,
+    this.audioCandidates,
+    this.ripperMedia,
+    this.ripperAutoConcurrency = true,
+    // BTR-END
   });
+
+  // BTR-BEGIN
+  /// 供加速器使用的候选视频地址列表（主地址 + 备用节点）。
+  final List<String>? videoCandidates;
+
+  /// 供加速器使用的候选音频地址列表（主地址 + 备用节点）。
+  final List<String>? audioCandidates;
+
+  /// 当前实际选中流的码率/分辨率/编码/HDR 标签，用于自动并发初值。
+  final RipperMediaDemand? ripperMedia;
+
+  /// false 时使用 [RipperPrefs.concurrency] 的固定手动并发。
+  final bool ripperAutoConcurrency;
+  // BTR-END
 }
 
 class FileSource extends DataSource {

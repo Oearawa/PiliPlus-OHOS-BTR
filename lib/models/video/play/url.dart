@@ -58,6 +58,12 @@ class PlayUrlModel {
   Language? language;
   List<SegmentItemModel>? clipInfoList;
 
+  /// Episode rights flags from the playurl response. They are used only to
+  /// decide whether the optional BTR proxy may handle a PGC episode; DRM and
+  /// preview-only streams must keep the normal player path.
+  bool isDrm = false;
+  bool isPreview = false;
+
   int findAvailableVideoQuality(int preferredQuality) {
     final curHighestVideoQa = dash!.video!.first.quality.code;
     if (acceptQuality case final qualitys?
@@ -116,6 +122,8 @@ class PlayUrlModel {
     language = json['language'] == null
         ? null
         : Language.fromJson(json['language']);
+    isDrm = _flag(json['is_drm']);
+    isPreview = _flag(json['is_preview']);
     // debug
     // final clipInfoList = [
     //   {
@@ -140,6 +148,9 @@ class PlayUrlModel {
       if (kDebugMode) rethrow;
     }
   }
+
+  static bool _flag(Object? value) =>
+      value == true || (value is num && value != 0);
 }
 
 class Language {

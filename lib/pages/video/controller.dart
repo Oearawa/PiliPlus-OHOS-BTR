@@ -54,6 +54,8 @@ import 'package:PiliPlus/plugin/pl_player/models/data_source.dart';
 import 'package:PiliPlus/plugin/pl_player/models/heart_beat_type.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
 import 'package:PiliPlus/services/download/download_service.dart';
+import 'package:PiliPlus/services/thread_ripper/media_demand.dart';
+import 'package:PiliPlus/services/thread_ripper/prefs.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/connectivity_utils.dart';
 import 'package:PiliPlus/utils/extension/context_ext.dart';
@@ -856,6 +858,41 @@ class VideoDetailController extends GetxController
     Duration? seek = defaultST ?? playedTime;
     if (seek == .zero) seek = null;
     seek ??= getFirstSegment();
+    // BTR-BEGIN
+    // UGC and eligible PGC episodes use the same DASH proxy. DRM and
+    // preview-only episodes deliberately stay direct; there is no way for the
+    // proxy to turn a restricted stream into a playable one.
+    List<String>? btrVideoCandidates;
+    List<String>? btrAudioCandidates;
+    RipperMediaDemand? btrMedia;
+    final bool ripperAllowed =
+        !isFileSource &&
+        data.dash != null &&
+        (videoType != VideoType.pgc ||
+            (RipperPrefs.episodeEnabled && !data.isDrm && !data.isPreview));
+    if (RipperPrefs.enabled && ripperAllowed) {
+      btrVideoCandidates = firstVideo.playUrls.toList();
+      AudioItem? audio;
+      final List<AudioItem>? audioList = data.dash!.audio;
+      final AudioQuality? audioQa = currentAudioQa;
+      if (audioList != null && audioQa != null) {
+        audio = audioList
+            .where((AudioItem item) => item.id == audioQa.code)
+            .firstOrNull;
+        btrAudioCandidates = audio?.playUrls.toList();
+      }
+      btrMedia = RipperMediaDemand(
+        videoBandwidth: firstVideo.bandWidth,
+        audioBandwidth: audio?.bandWidth,
+        width: firstVideo.width,
+        height: firstVideo.height,
+        frameRate: double.tryParse(firstVideo.frameRate ?? ''),
+        codec: firstVideo.codecs,
+        isHdr: currentVideoQa.value?.isHDR ?? false,
+        isDolbyVision: currentVideoQa.value == VideoQuality.dolbyVision,
+      );
+    }
+    // BTR-END
     await plPlayerController.setDataSource(
       isFileSource
           ? FileSource(
@@ -867,6 +904,12 @@ class VideoDetailController extends GetxController
           : NetworkSource(
               videoSource: videoUrl!,
               audioSource: audioUrl,
+              // BTR-BEGIN
+              videoCandidates: btrVideoCandidates,
+              audioCandidates: btrAudioCandidates,
+              ripperMedia: btrMedia,
+              ripperAutoConcurrency: RipperPrefs.autoConcurrency,
+              // BTR-END
             ),
       seekTo: seek,
       duration: data.timeLength == null
