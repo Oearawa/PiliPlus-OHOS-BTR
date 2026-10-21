@@ -7,7 +7,6 @@
 // `upos-sz-mirrorcoso1.bilivideo.com` is part of the mainland set.
 
 import 'package:PiliPlus/services/thread_ripper/cdn_resolver.dart';
-import 'package:PiliPlus/services/thread_ripper/range_core.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Uri _signed(String host, {String path = '/upgcxcode/1/2/3.m4s'}) => Uri.parse(

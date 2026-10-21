@@ -151,9 +151,24 @@ dist
 
 test*
 
+# `test*` above was meant for throwaway scripts in the repo root, but it also
+# matched the `test/` tree. Re-include the real test suite so contributors can
+# add tests without `git add -f`.
+!test/
+!test/**
+
 .agents
 skills-lock.json
 
 ohos/.codegenie
 .codex/skills/deveco-cli/SKILL.md
 .claude/skills/deveco-cli/SKILL.md
+
+# Local tooling state: plugin link cache and local workspace metadata.
+.flutter_plugin_links/
+.workbuddy/
+
+# Local dependency overrides. `pubspec_overrides.yaml` is machine specific
+# (it can point at a local checkout of a forked plugin), so it is never
+# published; the committed pubspec.lock already pins portable sources.
+pubspec_overrides.yaml

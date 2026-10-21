@@ -42,9 +42,7 @@ class RipperMediaDemand {
   /// A missing audio bitrate does not invalidate the video estimate.
   double? get estimatedDemandMbps {
     if (!_plausibleBandwidth(videoBandwidth)) return null;
-    final int audio = _plausibleBandwidth(audioBandwidth)
-        ? audioBandwidth!
-        : 0;
+    final int audio = _plausibleBandwidth(audioBandwidth) ? audioBandwidth! : 0;
     return (videoBandwidth! + audio) / 1000000.0;
   }
 

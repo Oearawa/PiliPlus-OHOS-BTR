@@ -527,8 +527,7 @@ class IdmDownloader {
     required bool audio,
     required String trackKey,
   }) {
-    final String key =
-        '$trackKey\u0000${piece.start}-${piece.end}';
+    final String key = '$trackKey\u0000${piece.start}-${piece.end}';
     final _PieceFlight? running = _flights[key];
     if (running != null) return _joinFlight(running, signal);
     final _PieceFlight flight = _PieceFlight();

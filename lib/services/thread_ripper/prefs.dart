@@ -205,7 +205,9 @@ abstract final class RipperPrefs {
     unawaited(GStorage.setting.put(concurrencyKey, current.concurrency));
     unawaited(GStorage.setting.put(modeKey, current.modeIndex));
     unawaited(GStorage.setting.put(enabledKey, current.enabled));
-    unawaited(GStorage.setting.put(autoConcurrencyKey, current.autoConcurrency));
+    unawaited(
+      GStorage.setting.put(autoConcurrencyKey, current.autoConcurrency),
+    );
     unawaited(GStorage.setting.put(episodeEnabledKey, current.episodeEnabled));
     unawaited(GStorage.setting.put(customHostsKey, current.customHosts));
   }

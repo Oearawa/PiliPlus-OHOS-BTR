@@ -74,28 +74,33 @@ void main() {
   group('media prior', () {
     test('maps the upstream bandwidth bands to initial rungs', () {
       expect(
-        const RipperMediaDemand(videoBandwidth: 4000000)
-            .suggestedInitialThreads(),
+        const RipperMediaDemand(
+          videoBandwidth: 4000000,
+        ).suggestedInitialThreads(),
         8,
       );
       expect(
-        const RipperMediaDemand(videoBandwidth: 8000000)
-            .suggestedInitialThreads(),
+        const RipperMediaDemand(
+          videoBandwidth: 8000000,
+        ).suggestedInitialThreads(),
         12,
       );
       expect(
-        const RipperMediaDemand(videoBandwidth: 20000000)
-            .suggestedInitialThreads(),
+        const RipperMediaDemand(
+          videoBandwidth: 20000000,
+        ).suggestedInitialThreads(),
         16,
       );
       expect(
-        const RipperMediaDemand(videoBandwidth: 40000000)
-            .suggestedInitialThreads(),
+        const RipperMediaDemand(
+          videoBandwidth: 40000000,
+        ).suggestedInitialThreads(),
         24,
       );
       expect(
-        const RipperMediaDemand(videoBandwidth: 80000000)
-            .suggestedInitialThreads(),
+        const RipperMediaDemand(
+          videoBandwidth: 80000000,
+        ).suggestedInitialThreads(),
         32,
       );
     });
@@ -109,13 +114,19 @@ void main() {
         24,
       );
       expect(
-        const RipperMediaDemand(width: 1920, height: 1080, frameRate: 60)
-            .suggestedInitialThreads(),
+        const RipperMediaDemand(
+          width: 1920,
+          height: 1080,
+          frameRate: 60,
+        ).suggestedInitialThreads(),
         12,
       );
       expect(
-        const RipperMediaDemand(width: 3840, height: 2160, frameRate: 60)
-            .suggestedInitialThreads(),
+        const RipperMediaDemand(
+          width: 3840,
+          height: 2160,
+          frameRate: 60,
+        ).suggestedInitialThreads(),
         32,
       );
       // HDR/DV alone must not manufacture a high bitrate.
@@ -207,21 +218,24 @@ void main() {
       expect(h.auto.threads, 16);
     });
 
-    test('low buffer with active work steps up after the pressure window', () async {
-      final _Harness h = _Harness();
-      h.start(initialThreads: 8, startup: false);
-      final List<void Function()> releases = await h.occupy(7);
-      h.queueOne();
+    test(
+      'low buffer with active work steps up after the pressure window',
+      () async {
+        final _Harness h = _Harness();
+        h.start(initialThreads: 8, startup: false);
+        final List<void Function()> releases = await h.occupy(7);
+        h.queueOne();
 
-      h.lowBufferAt(3000);
-      h.lowBufferAt(4100);
-      h.lowBufferAt(5200);
-      expect(h.auto.threads, 12);
-      expect(h.semaphore.limit, 12);
-      for (final void Function() release in releases) {
-        release();
-      }
-    });
+        h.lowBufferAt(3000);
+        h.lowBufferAt(4100);
+        h.lowBufferAt(5200);
+        expect(h.auto.threads, 12);
+        expect(h.semaphore.limit, 12);
+        for (final void Function() release in releases) {
+          release();
+        }
+      },
+    );
 
     test('dropping buffer at capacity steps up without metadata', () async {
       final _Harness h = _Harness();

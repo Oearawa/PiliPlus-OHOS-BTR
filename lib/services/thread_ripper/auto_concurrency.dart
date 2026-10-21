@@ -502,8 +502,7 @@ class AutoConcurrency {
   bool _atCapacity() {
     final int active = semaphore.active;
     final int limit = semaphore.limit;
-    return active >= math.max(1, (limit * .8).ceil()) &&
-        semaphore.queued > 0;
+    return active >= math.max(1, (limit * .8).ceil()) && semaphore.queued > 0;
   }
 
   /// Player buffer sample. [waiting] is true while the player is in its
@@ -613,9 +612,7 @@ class AutoConcurrency {
     );
     if (pressure) {
       stepped = _stepUp('缓冲低于 6 秒且持续无增长，下载未跟上');
-    } else if (dropping &&
-        (ratio == null || ratio < 1.5) &&
-        capacity) {
+    } else if (dropping && (ratio == null || ratio < 1.5) && capacity) {
       stepped = _stepUp('缓冲 5 秒内下降，活动请求接近上限且仍有排队任务');
     }
 
@@ -720,8 +717,9 @@ class AutoConcurrency {
     final int now = _now();
     if (timeout) _timeouts += 1;
     _failures += 1;
-    _consecutiveFailures =
-        now - _lastFailureAt <= 30000 ? _consecutiveFailures + 1 : 1;
+    _consecutiveFailures = now - _lastFailureAt <= 30000
+        ? _consecutiveFailures + 1
+        : 1;
     _lastFailureAt = now;
     if (_consecutiveFailures >= 3) {
       _cooldownUntil = math.max(_cooldownUntil, now + 15000);
@@ -759,7 +757,8 @@ class AutoConcurrency {
       return;
     }
     final bool noBaseline = trial.baselineBps <= 0;
-    final bool throughputGain = noBaseline || current >= trial.baselineBps * 1.10;
+    final bool throughputGain =
+        noBaseline || current >= trial.baselineBps * 1.10;
     final bool bufferGain = trend >= trial.baselineTrend + 0.25;
     if (throughputGain || bufferGain || trial.stalled) {
       _lastReason = throughputGain && !noBaseline

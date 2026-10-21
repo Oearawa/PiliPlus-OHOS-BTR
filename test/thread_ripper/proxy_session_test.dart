@@ -143,23 +143,26 @@ void main() {
     }
   });
 
-  test('a source that ignores Range produces a 502 the player can fall back on', () async {
-    source.ignoreRange = true;
-    final RipperRangeProxy proxy = RipperRangeProxy(
-      settings: const RipperSettings(concurrency: 2, maxRounds: 1),
-      userAgent: 'test-player',
-    );
-    await proxy.start();
-    try {
-      final Uri track = proxy.register(<Uri>[source.uri('video.m4s')]);
-      expect(await _status(client, track), HttpStatus.badGateway);
-      // The session itself is still usable for another attempt (the player
-      // simply retries with the direct URL after this).
-      expect(proxy.port, greaterThan(0));
-    } finally {
-      await proxy.close();
-    }
-  });
+  test(
+    'a source that ignores Range produces a 502 the player can fall back on',
+    () async {
+      source.ignoreRange = true;
+      final RipperRangeProxy proxy = RipperRangeProxy(
+        settings: const RipperSettings(concurrency: 2, maxRounds: 1),
+        userAgent: 'test-player',
+      );
+      await proxy.start();
+      try {
+        final Uri track = proxy.register(<Uri>[source.uri('video.m4s')]);
+        expect(await _status(client, track), HttpStatus.badGateway);
+        // The session itself is still usable for another attempt (the player
+        // simply retries with the direct URL after this).
+        expect(proxy.port, greaterThan(0));
+      } finally {
+        await proxy.close();
+      }
+    },
+  );
 
   test('registering before start is a state error, not a hang', () {
     final RipperRangeProxy proxy = RipperRangeProxy(

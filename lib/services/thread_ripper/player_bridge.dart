@@ -197,7 +197,8 @@ class RipperPlayerBridge {
     _videoUrl = '';
     _audioUrl = '';
     auto?.close();
-    proxy?..setDeliveryListener(null)
+    proxy
+      ?..setDeliveryListener(null)
       ..setActivityListener(null)
       ..setHttpStatusListener(null);
     try {

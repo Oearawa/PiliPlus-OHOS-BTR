@@ -62,30 +62,33 @@ class _Harness {
 
 void main() {
   group('activity gate', () {
-    test('a low buffer does not raise threads while nothing is arriving', () async {
-      final _Harness h = _Harness();
-      h.start(startup: false);
-      await h.occupy(1);
-      h.auto.activity();
-      // The player is starved, but the downloader delivered nothing for over
-      // a second: the thread count is not what is missing.
-      h.now = 3000;
-      h.auto.buffer(3, true);
-      h.now = 4100;
-      h.auto.buffer(3, true);
-      h.now = 5200;
-      h.auto.buffer(3, true);
-      expect(h.auto.threads, 8);
-      expect(h.auto.downloading, isFalse);
+    test(
+      'a low buffer does not raise threads while nothing is arriving',
+      () async {
+        final _Harness h = _Harness();
+        h.start(startup: false);
+        await h.occupy(1);
+        h.auto.activity();
+        // The player is starved, but the downloader delivered nothing for over
+        // a second: the thread count is not what is missing.
+        h.now = 3000;
+        h.auto.buffer(3, true);
+        h.now = 4100;
+        h.auto.buffer(3, true);
+        h.now = 5200;
+        h.auto.buffer(3, true);
+        expect(h.auto.threads, 8);
+        expect(h.auto.downloading, isFalse);
 
-      // Bytes flow again: the same low buffer is now evidence.
-      h.auto.activity();
-      h.now = 6400;
-      h.auto.buffer(3, true);
-      expect(h.auto.threads, 12);
-      expect(h.semaphore.limit, 12);
-      h.releaseAll();
-    });
+        // Bytes flow again: the same low buffer is now evidence.
+        h.auto.activity();
+        h.now = 6400;
+        h.auto.buffer(3, true);
+        expect(h.auto.threads, 12);
+        expect(h.semaphore.limit, 12);
+        h.releaseAll();
+      },
+    );
 
     test('activity ages out after one and a half seconds', () {
       final _Harness h = _Harness();

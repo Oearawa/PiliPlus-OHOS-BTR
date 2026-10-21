@@ -167,36 +167,39 @@ void main() {
       engine.close();
     });
 
-    test('a caller that gives up does not cancel the shared transfer', () async {
-      final IdmDownloader engine = downloader(concurrency: 1);
-      cdn.delayMs = 120;
-      final ByteRange range = ByteRange(0, 65535);
-      // The first caller owns the transfer; the second one only waits for it.
-      final Future<DownloadResult> kept = engine.downloadRange(
-        range,
-        resolver,
-        trackKey: 'video',
-      );
-      await Future<void>.delayed(const Duration(milliseconds: 10));
-      final RipperAbortSignal signal = RipperAbortSignal();
-      final Future<DownloadResult> abandoned = engine.downloadRange(
-        range,
-        resolver,
-        signal: signal,
-        trackKey: 'video',
-      );
-      final Future<void> expectation = expectLater(
-        abandoned,
-        throwsA(isA<RipperAbortException>()),
-      );
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      signal.abort();
-      await expectation;
-      final DownloadResult result = await kept;
-      expect(result.byteLength, 65536);
-      expect(cdn.requests, 1);
-      engine.close();
-    });
+    test(
+      'a caller that gives up does not cancel the shared transfer',
+      () async {
+        final IdmDownloader engine = downloader(concurrency: 1);
+        cdn.delayMs = 120;
+        final ByteRange range = ByteRange(0, 65535);
+        // The first caller owns the transfer; the second one only waits for it.
+        final Future<DownloadResult> kept = engine.downloadRange(
+          range,
+          resolver,
+          trackKey: 'video',
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        final RipperAbortSignal signal = RipperAbortSignal();
+        final Future<DownloadResult> abandoned = engine.downloadRange(
+          range,
+          resolver,
+          signal: signal,
+          trackKey: 'video',
+        );
+        final Future<void> expectation = expectLater(
+          abandoned,
+          throwsA(isA<RipperAbortException>()),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        signal.abort();
+        await expectation;
+        final DownloadResult result = await kept;
+        expect(result.byteLength, 65536);
+        expect(cdn.requests, 1);
+        engine.close();
+      },
+    );
   });
 
   group('timeout classification', () {
@@ -216,19 +219,22 @@ void main() {
       engine.close();
     });
 
-    test('a stalled body is reported as -2, not as a first-byte timeout', () async {
-      final IdmDownloader engine = downloader(
-        stall: const Duration(milliseconds: 120),
-      );
-      cdn.stallBody = true;
-      await expectLater(
-        engine.downloadRange(const ByteRange(0, 65535), resolver),
-        throwsA(isA<RipperHttpException>()),
-      );
-      expect(statuses, contains(-2));
-      expect(statuses, isNot(contains(-1)));
-      engine.close();
-    });
+    test(
+      'a stalled body is reported as -2, not as a first-byte timeout',
+      () async {
+        final IdmDownloader engine = downloader(
+          stall: const Duration(milliseconds: 120),
+        );
+        cdn.stallBody = true;
+        await expectLater(
+          engine.downloadRange(const ByteRange(0, 65535), resolver),
+          throwsA(isA<RipperHttpException>()),
+        );
+        expect(statuses, contains(-2));
+        expect(statuses, isNot(contains(-1)));
+        engine.close();
+      },
+    );
   });
 
   group('server pushback and recovery', () {
