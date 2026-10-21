@@ -26,7 +26,9 @@ Future<void> _updatePubspecVersion(int versionCode) async {
 
 void main() async {
   // 手动指定 versionName
-  const versionName = '2.1.6.2-ohos';
+  // 本项目是独立发布线，应用内「关于」显示自己的版本标签，
+  // 不再沿用基线 PiliPlus 的 2.1.6.2-ohos，避免按错误版本反馈问题。
+  const versionName = '0.1.0-beta.1';
 
   // 通过 git 命令获取 hash 和 code
   final versionCode = await _getGitCommitCount();
