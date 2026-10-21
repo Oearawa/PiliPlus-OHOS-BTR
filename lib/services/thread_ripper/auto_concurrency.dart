@@ -701,10 +701,10 @@ class AutoConcurrency {
     _consecutiveFailures = 0;
     _trial = null;
     _trialBytes = 0;
-    const int restMs = 60000;
-    _cooldownUntil = now + restMs;
+    const int firstByteRestMs = 60000;
+    _cooldownUntil = now + firstByteRestMs;
     final int failedLevel = _level;
-    if (failedLevel > 0) _blockedUntil[failedLevel] = now + restMs;
+    if (failedLevel > 0) _blockedUntil[failedLevel] = now + firstByteRestMs;
     _stepDown('首个字节超时（$failedLevel 档），退回一档并冷却 60 秒', force: true);
     _state = AutoConcurrencyState.backoff;
   }

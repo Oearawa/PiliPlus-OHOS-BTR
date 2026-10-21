@@ -63,7 +63,7 @@ mpv ──Range──▶ http://127.0.0.1:<随机端口>/<token>/0
 | 区间拆分 | 小于最小片时保持整段 | 仍按请求并发拆分 | 本项目的短片只出现在探测与小尾巴 |
 | 首字节超时 | 统一 5.5 s | 5.5 s，且与传输卡顿分开上报 | 便于区分“连不上”和“节点慢” |
 | 升档判定 | 缓冲 + 吞吐 | 追加 activity 门控与饱和占比 | 避免无数据到达时误判为连接不足 |
-| 冷却 | 412/429 长冷却 | 412/429 180 s；首字节超时 90 s | 两类故障的恢复时间不同 |
+| 冷却 | 412/429 长冷却 | 412/429 180 s；首字节超时 60 s；升档试探回退 90 s | 三类故障的恢复时间不同 |
 
 ## 6. 关键参数（代码中的实际值）
 
@@ -78,7 +78,8 @@ mpv ──Range──▶ http://127.0.0.1:<随机端口>/<token>/0
 | hedge 延迟 | 900 ms | `RipperSettings.hedgeDelay` |
 | 重试轮次 | 3 | `RipperSettings.maxRounds` |
 | 试探窗口 | 10 s | `AutoConcurrency.trialMs` |
-| 退档冷却 | 90 s | `AutoConcurrency.restMs` |
+| 升档试探回退冷却 | 90 s | `AutoConcurrency.restMs` |
+| 首字节超时冷却 | 60 s | `firstByteTimeout` 中的 `firstByteRestMs` |
 | 412/429 冷却 | 180 s | `AutoConcurrency.pushbackRestMs` |
 | 饱和判定 | active ≥ limit 且 queued > 0，占比 ≥ 60% | `AutoConcurrency.saturatedShare` |
 | activity 有效窗 | 1.5 s | `AutoConcurrency.activityMs` |
