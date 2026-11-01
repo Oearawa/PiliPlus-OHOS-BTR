@@ -61,6 +61,71 @@ class RipperHttpException implements Exception {
   String toString() => 'RipperHttpException($status): $message';
 }
 
+/// A transfer that stopped after delivering a verified prefix of the piece.
+///
+/// Upstream keeps the bytes already received (`keepProgress`) and asks only for
+/// the remainder on the next attempt; throwing them away would turn one stall
+/// into a full re-download of the same range.
+class RipperPartialException implements Exception {
+  const RipperPartialException(this.bytes, this.cause);
+
+  /// Bytes received in order from the requested start, never longer than the
+  /// requested range.
+  final Uint8List bytes;
+  final Object cause;
+
+  @override
+  String toString() => 'RipperPartialException(${bytes.length}B): $cause';
+}
+
+/// Below this a resumed request saves less than its own round trip costs.
+const int resumeMinBytes = 32 * 1024;
+
+/// Smallest and largest sub-chunk the adaptive splitter will pick.
+const int minAdaptiveChunkBytes = 64 * 1024;
+const int maxAdaptiveChunkBytes = 1024 * 1024;
+
+/// `adaptiveMinChunk(settings, rangeLength, pieceLimit, hostCount)`.
+///
+/// A sub-chunk should keep its connection busy for a good part of a second or
+/// request round trips dominate on high-latency routes, so the target is about
+/// 0.6 s of one connection, rounded down to a 64 KiB step. It never goes below
+/// [minChunkBytes] (the configured floor while the speed is unknown) nor above
+/// 1 MiB, and never larger than the range spread over the available
+/// connections: the total bandwidth only grows by spreading over hosts.
+int adaptiveChunkBytes({
+  required int rangeLength,
+  required int pieceLimit,
+  required int hostCount,
+  required int minChunkBytes,
+  required double connectionBps,
+}) {
+  final int floorBytes = math.max(1, minChunkBytes);
+  if (rangeLength <= 0 || !(connectionBps > 0)) return floorBytes;
+  const int step = minAdaptiveChunkBytes;
+  final int target = (connectionBps * 0.6 / step).floor() * step;
+  final int slots = math.max(
+    1,
+    math.min(math.max(4, hostCount), math.max(1, pieceLimit)),
+  );
+  final int spread = (rangeLength / slots).ceil();
+  return math.max(
+    floorBytes,
+    math.min(math.min(maxAdaptiveChunkBytes, target), spread),
+  );
+}
+
+/// `hedgeDelayMs(settings)`: start the second copy once a piece is taking
+/// clearly longer than pieces have been taking, instead of always waiting the
+/// full configured delay.
+int adaptiveHedgeDelayMs({
+  required int configuredMs,
+  required double pieceMs,
+}) {
+  if (!(pieceMs > 0)) return configuredMs;
+  return math.max(250, math.min(configuredMs, (pieceMs * 1.5).round()));
+}
+
 /// Minimal `AbortController`/`AbortSignal` replacement.
 ///
 /// `abort()` is idempotent; listeners fire synchronously; [whenAborted] can be
@@ -249,8 +314,9 @@ class RipperSemaphore {
     waiter.cancel = cancel;
     signal?.addListener(cancel);
     _queue.add(waiter);
+    // `_drain` reports the pool state in its own `finally`; a second call here
+    // only doubled the notifications (upstream removed the same duplicate).
     _drain();
-    onChange?.call(_active, _limit, _queue.length);
     return completer.future;
   }
 
@@ -382,6 +448,38 @@ class IdmDownloader {
   /// Byte ranges currently in flight, keyed by track and absolute range.
   final Map<String, _PieceFlight> _flights = <String, _PieceFlight>{};
 
+  /// Rolling estimate of one connection's throughput and of how long a piece
+  /// takes, fed by every completed copy (upstream `meter`). The adaptive chunk
+  /// size and the hedge delay read them.
+  double _connectionBps = 0;
+  double _pieceMs = 0;
+
+  /// EWMA of the measured per-connection speed, bytes/s. 0 until measured.
+  double get connectionBps => _connectionBps;
+
+  /// EWMA of the time a piece took to download, milliseconds. 0 until measured.
+  double get pieceMs => _pieceMs;
+
+  void _recordMeter(int bytes, Duration elapsed) {
+    if (bytes < speedSampleMinBytes || elapsed.inMilliseconds <= 0) return;
+    final double bps = bytes * 1000 / elapsed.inMilliseconds;
+    final double ms = elapsed.inMilliseconds.toDouble();
+    _connectionBps = _connectionBps > 0
+        ? _connectionBps * 0.7 + bps * 0.3
+        : bps;
+    _pieceMs = _pieceMs > 0 ? _pieceMs * 0.7 + ms * 0.3 : ms;
+  }
+
+  /// Sub-chunk size for a range: 64 KiB..1 MiB, about 0.6 s of one connection.
+  int adaptiveChunkFor(int rangeLength, int pieceLimit, int hostCount) =>
+      adaptiveChunkBytes(
+        rangeLength: rangeLength,
+        pieceLimit: pieceLimit,
+        hostCount: hostCount,
+        minChunkBytes: settings.minChunkBytes,
+        connectionBps: _connectionBps,
+      );
+
   /// Last time a body chunk arrived, on the same clock as the controller.
   int _lastActivityAt = -1;
 
@@ -437,11 +535,18 @@ class IdmDownloader {
     final List<Uri> preferred = parallel
         ? resolver.rangeCandidates()
         : resolver.urls();
+    // The sub-chunk follows the measured speed: a slow route keeps the 64 KiB
+    // floor (request round trips are cheap there), a fast one grows the pieces
+    // up to 1 MiB so one connection stays busy instead of paying a round trip
+    // per small range.
+    final int chunkBytes = parallel
+        ? adaptiveChunkFor(range.length, effective, preferred.length)
+        : settings.minChunkBytes;
     final List<ByteRange> pieces = splitRange(
       range.start,
       range.end,
       effective,
-      settings.minChunkBytes,
+      chunkBytes,
     );
     final List<Uri> primaries = parallel
         ? assignments.assign(preferred, resolver, pieces.length)
@@ -584,6 +689,12 @@ class IdmDownloader {
   }
 
   /// `downloadPiece(piece, resolver, ...)`.
+  ///
+  /// When a copy stalls after delivering a verified prefix, the next copy asks
+  /// only for the remainder (`keepProgress` upstream): the received bytes are
+  /// kept in [prefix] and joined once the rest arrives. A prefix shorter than
+  /// [resumeMinBytes] is dropped, because asking for the tail of a piece costs
+  /// a round trip that then saves almost nothing.
   Future<DownloadPiece> _downloadPiece(
     ByteRange piece,
     CdnResolver resolver, {
@@ -595,6 +706,7 @@ class IdmDownloader {
   }) async {
     Object lastError = const RipperHttpException('no available CDN');
     final Stopwatch started = Stopwatch()..start();
+    Uint8List? prefix;
     for (int round = 0; round < settings.maxRounds; round += 1) {
       signal?.throwIfAborted();
       if (round > 0) {
@@ -622,21 +734,45 @@ class IdmDownloader {
             .toList();
         if (pair.isEmpty) break;
         tried.addAll(pair);
+        final ByteRange remaining = prefix == null
+            ? piece
+            : ByteRange(piece.start + prefix.length, piece.end);
         try {
           final DownloadPiece winner = await _race(
-            piece,
+            remaining,
             pair,
             resolver,
             signal: signal,
             startup: startup,
             audio: audio,
           );
+          final DownloadPiece combined = prefix == null
+              ? winner
+              : DownloadPiece(
+                  concatChunks(<List<int>>[prefix, winner.bytes], piece.length),
+                  winner.total,
+                  winner.url,
+                );
           // Count only the winning copy. A hedge loser may have completed in
           // the same event-loop turn and must not inflate goodput.
-          onDelivered?.call(winner.bytes.length);
-          return winner;
+          onDelivered?.call(combined.bytes.length);
+          return combined;
         } on Object catch (error) {
           lastError = error;
+          if (error is RipperPartialException) {
+            final Uint8List merged = prefix == null
+                ? error.bytes
+                : Uint8List.fromList(<int>[
+                    ...prefix,
+                    ...error.bytes,
+                  ]);
+            // Keep the verified prefix only when it is worth a round trip and
+            // still leaves something to ask for.
+            prefix =
+                merged.length >= resumeMinBytes && merged.length < piece.length
+                ? merged
+                : null;
+          }
         }
       }
     }
@@ -688,9 +824,16 @@ class IdmDownloader {
 
     launch(0);
     for (int index = 1; index < urls.length; index += 1) {
+      // A copy follows how long pieces have been taking: a route where a piece
+      // already takes longer than the configured delay gets its copy sooner;
+      // a fast one waits the full delay and keeps the connection for the next
+      // piece instead.
       final int delayMs = startup
           ? 0
-          : math.min(250, settings.hedgeDelay.inMilliseconds);
+          : adaptiveHedgeDelayMs(
+              configuredMs: settings.hedgeDelay.inMilliseconds,
+              pieceMs: _pieceMs,
+            );
       if (delayMs <= 0) {
         launch(index);
       } else {
@@ -797,6 +940,7 @@ class IdmDownloader {
       }
       completed = true;
       resolver.success(url, bytes: bytes.length, elapsed: elapsed.elapsed);
+      _recordMeter(bytes.length, elapsed.elapsed);
       return DownloadPiece(bytes, total, url);
     } on Object catch (error) {
       final bool aborted =
@@ -820,6 +964,13 @@ class IdmDownloader {
       } else {
         throw const RipperAbortException();
       }
+      // A partial body carries the verified prefix to the caller, which asks
+      // for the remainder instead of re-downloading the whole piece. It is
+      // still a stall for the scheduler, so the same -2 signal is reported.
+      if (error is RipperPartialException) {
+        if (received > 0) onHttpStatus?.call(-2);
+        rethrow;
+      }
       // A timeout before the first body byte means the node or the signature
       // is not answering: the controller lowers the thread count at once. A
       // stall after bytes arrived is a slow node, which only counts as one
@@ -839,8 +990,8 @@ class IdmDownloader {
     }
   }
 
-  /// `readBody(response, ...)`: only the stall timeout differs from plain
-  /// reading, plus a hard length ceiling on the caller side.
+  /// `readBody(response, ...)`: like plain reading, but a timeout keeps the
+  /// bytes received so far instead of discarding them.
   Future<Uint8List> _readBody(
     HttpClientResponse response,
     RipperAbortSignal? signal,
@@ -848,10 +999,19 @@ class IdmDownloader {
     required void Function(int length) onChunk,
   }) async {
     final BytesBuilder builder = BytesBuilder(copy: false);
-    await for (final List<int> chunk in response.timeout(stallTimeout)) {
-      signal?.throwIfAborted();
-      builder.add(chunk);
-      onChunk(chunk.length);
+    try {
+      await for (final List<int> chunk in response.timeout(stallTimeout)) {
+        signal?.throwIfAborted();
+        builder.add(chunk);
+        onChunk(chunk.length);
+      }
+    } on Object catch (error) {
+      final Uint8List partial = builder.takeBytes();
+      if (signal?.isAborted ?? false) {
+        throw const RipperAbortException();
+      }
+      if (partial.isEmpty) rethrow;
+      throw RipperPartialException(partial, error);
     }
     return builder.takeBytes();
   }

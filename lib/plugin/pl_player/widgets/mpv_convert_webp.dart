@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:ffi';
 
 import 'package:PiliPlus/http/constants.dart';
+// 本地 media_kit fork 尚未提供 Mvp.setHeader，保留本地 FFI 适配层。
 import 'package:PiliPlus/media_kit_adapt/media_kit_adapt.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/mpv_handle_releaser.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
@@ -13,6 +14,7 @@ import 'package:get/get_rx/get_rx.dart';
 import 'package:media_kit/ffi/src/allocation.dart';
 import 'package:media_kit/ffi/src/utf8.dart';
 import 'package:media_kit/generated/libmpv/bindings.dart' as generated;
+import 'package:media_kit/media_kit.dart';
 import 'package:media_kit/src/player/native/core/initializer.dart';
 import 'package:media_kit/src/player/native/core/native_library.dart';
 
@@ -120,9 +122,9 @@ class MpvConvertWebp {
         break;
       case generated.mpv_event_id.MPV_EVENT_LOG_MESSAGE:
         final log = event.ref.data.cast<generated.mpv_event_log_message>().ref;
-        final prefix = log.prefix.toDartString().trim();
-        final level = log.level.toDartString().trim();
-        final text = log.text.toDartString().trim();
+        final prefix = log.prefix.cast<Utf8>().toDartString().trim();
+        final level = log.level.cast<Utf8>().toDartString().trim();
+        final text = log.text.cast<Utf8>().toDartString().trim();
         debugPrint('WebpConvert: $level $prefix : $text');
         if (kDebugMode) {
           if (level == 'error' || level == 'fatal') _success = false;

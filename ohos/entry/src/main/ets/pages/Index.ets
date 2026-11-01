@@ -1,10 +1,12 @@
 import { curves, LengthMetrics, SymbolGlyphModifier, uiMaterial, uiObserver } from '@kit.ArkUI';
 import { deviceInfo } from '@kit.BasicServicesKit';
-import { HdsAnimationMode, hdsMaterial, HdsTabs, HdsTabsController } from '@kit.UIDesignKit';
+import { HdsAnimationMode, hdsMaterial, HdsTabs, HdsNavigation, HdsTabsController, ScrollEffectType } from '@kit.UIDesignKit';
 import common from '@ohos.app.ability.common';
 import image from '@ohos.multimedia.image';
 import window from '@ohos.window';
 import { FlutterPage } from '@ohos/flutter_ohos';
+import { windowChrome } from '../window/WindowChrome';
+import { WindowTitleBar } from '../window/WindowTitleBar';
 
 let storage = LocalStorage.getShared();
 
@@ -21,7 +23,7 @@ const NAV_UNSELECTED = $r('sys.color.comp_focused_primary');
 const BOTTOM_NORMAL_AVOID_AREA_VALUE = 1;
 const BOTTOM_SPECIAL_AVOID_AREA_VALUE = 12;
 const TOP_BAR_BLUR_RADIUS = 15;
-const TOP_BAR_FRACTION_STOPS: [number, number][] = [[0, 0], [0.8, 0.2], [1, 0.4], [1, 1]];
+const TOP_BAR_FRACTION_STOPS: [number, number][] = [[0, 0], [0.92, 0.1], [1, 1]];
 const TOP_BAR_COLLAPSED_HEIGHT = 80;
 const TOP_BAR_EXPANDED_HEIGHT = 144;
 /// 顶栏收缩曲线：重减速的三次贝塞尔，起步轻、尾段长距离滑停，
@@ -107,6 +109,18 @@ struct Index {
   @StorageLink('dynBadgeCount') dynBadgeCount: number = 0;
   /// 沉浸光感底栏材质等级（Flutter 按设置下发；0=精美 1=轻柔 2=流畅 10=自适应）
   @StorageLink('tabMaterialLevel') tabMaterialLevel: number = 10;
+  /// 自绘标题带显隐与占位高度，由 WindowChrome 下发（自由窗口形态下为 true）
+  @StorageLink('titleBarVisible') @Watch('onTitleBarVisibleChanged') titleBarVisible: boolean = false;
+  @StorageLink('titleBarHeight') titleBarHeight: number = 0;
+  /// 窗口是否处于自由窗口形态（2in1/PC、平板自由多窗、电脑模式）
+  @StorageLink('windowFreeMode') windowFreeMode: boolean = false;
+  /// 顶栏右侧需让出的系统三键宽度（vp）。
+  ///
+  /// 隐藏系统标题栏（setWindowDecorVisible(false)）后，右上角三键并不消失，
+  /// 而是下沉到页面可绘制区顶部 —— 官方 FAQ 明确「设置隐藏后，标题栏中的
+  /// 三键区域会下沉到页面区域中显示」，需由页面自行避让（getTitleButtonRect）。
+  /// 自绘标题带会整条盖住这一区域，故只有未显示标题带时才让位。
+  @State titleButtonInset: number = 0;
   /// 当前选中的底部 Navbar 页签索引（自定义 tabBar 需自行区分选中态）
   @State currentNavIndex: number = 0;
   @State statusBarHeight: number = 0;
@@ -128,6 +142,8 @@ struct Index {
   @State rotationMaskOpacity: number = 1;
   private rotationCallback: ((info: window.RotationChangeInfo) => void) | null = null;
   private rotationMaskTimers: number[] = [];
+  /// aboutToDisappear 早于 getLastWindow 回调时，避免继续装监听
+  private disposed: boolean = false;
   private currentOrientation: number = 0;
 
   /// 背景色
@@ -247,7 +263,15 @@ struct Index {
     });
 
     window.getLastWindow(this.context).then((w: window.Window) => {
+      if (this.disposed) {
+        return;
+      }
       this.win = w;
+      // 页面已挂载并即将首帧布局：此时才是装饰栏接口（setWindowDecorVisible /
+      // setWindowDecorHeight / setWindowTitleButtonVisible）的合法时机，
+      // 通知 WindowChrome 正式下发「隐藏系统标题栏 + 三键」，内容区随之铺满整窗。
+      windowChrome.onContentLoaded();
+      this.refreshTitleButtonInset();
       let topAvoidArea = w.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
       this.statusBarHeight = px2vp(topAvoidArea.topRect.height);
       w.on('avoidAreaChange', (data) => {
@@ -324,7 +348,36 @@ struct Index {
     }, 3000);
   }
 
+  /// 自绘标题带显隐后，三键是否还露在内容区上方会变，需重算顶栏避让
+  onTitleBarVisibleChanged(): void {
+    this.refreshTitleButtonInset();
+  }
+
+  /// 读取系统三键区尺寸，用于顶栏右侧避让。
+  /// 隐藏系统标题栏后三键并不消失，而是下沉到页面可绘制区右上角；
+  /// 自绘标题带会整条盖住它（此时不需要让位），未显示标题带时必须让位，
+  /// 否则顶栏的头像/消息按钮会与系统三键重叠。
+  private refreshTitleButtonInset(): void {
+    if (this.win === null) {
+      this.titleButtonInset = 0;
+      return;
+    }
+    if (!this.windowFreeMode) {
+      this.titleButtonInset = 0;
+      return;
+    }
+    try {
+      const rect: window.TitleButtonRect = this.win.getTitleButtonRect();
+      // titleBarVisible 时标题带压在顶部，三键被完全盖住，留给内容的是 0
+      this.titleButtonInset = this.titleBarVisible ? 0 : this.getUIContext().px2vp(rect.width);
+    } catch (err) {
+      console.error(TAG, `getTitleButtonRect failed: ${err}`);
+      this.titleButtonInset = 0;
+    }
+  }
+
   aboutToDisappear(): void {
+    this.disposed = true;
     if (this.densityCallback !== null) {
       try {
         this.getUIContext()
@@ -514,90 +567,58 @@ struct Index {
 
   @Builder
   homeTopBar() {
-    RelativeContainer() {
-      //渐变模糊底层
-      Column() {
-      }
-      .constraintSize({ maxHeight: TOP_BAR_EXPANDED_HEIGHT })
-      .linearGradient({
-          direction: GradientDirection.Bottom, // 渐变方向
-          colors: [
-                [$r('app.color.top_bar_mask_start'), 0],
-                [$r('app.color.top_bar_mask_mid'), 0.8],
-                [$r('app.color.top_bar_mask_end'), 0.95],
-                [$r('app.color.top_bar_mask_end'), 1],
-              ],
-        })
-      .linearGradientBlur(TOP_BAR_BLUR_RADIUS, {
-        fractionStops: TOP_BAR_FRACTION_STOPS,
-        direction: GradientDirection.Top
-      })
-      .alignRules({
-        top: { anchor: 'topBarContent', align: VerticalAlign.Top },
-        bottom: { anchor: 'topBarContent', align: VerticalAlign.Bottom },
-        left: { anchor: 'topBarContent', align: HorizontalAlign.Start },
-        right: { anchor: 'topBarContent', align: HorizontalAlign.End }
-      })
-      .id('topBarBg')
-      .hitTestBehavior(HitTestMode.Transparent)
-      .align(Alignment.Top)
-
-      Column() {
-        Row({ space: 8 }) {
-          Search({ value: this.homeSearchText, placeholder: '搜索' })
-            .cancelButton({ style: CancelButtonStyle.INVISIBLE })
-            .focusable(false)
-            .enableKeyboardOnFocus(false)
-            .searchIcon(new SymbolGlyphModifier($r('sys.symbol.magnifyingglass'))
-              .fontColor([this.navSelected]).fontSize(16))
-            .placeholderColor($r('app.color.placeholder_text'))
-            .placeholderFont({ size: 16, weight: 600 })
-            .fontColor($r('app.color.placeholder_text'))
-            .textFont({ size: 16, weight: 600 })
-            .backgroundColor(Color.Transparent)
-            .borderRadius(22)
-            .layoutWeight(1)
-            .height(44)
-            .systemMaterial(topBarMaterial(true))
-            .onClick(() => {
-              this.context.eventHub.emit(EVENT_TOP_SEARCH);
-            })
-          this.msgButton()
-          this.avatarButton()
-        }
-        .width('100%')
-        .padding({
-          left: 14,
-          right: 14,
-        })
-        .opacity(this.homeHideTopBar && this.topBarCollapsed ? 0 : 1)
-        // .animation() 只作用于它之前、上一个 .animation() 之后的属性，
-        // 故透明度与高度可以各走一套节奏
-        .animation({
-          duration: TOP_BAR_FADE_DURATION,
-          curve: Curve.Sharp,
-          delay: this.homeHideTopBar && this.topBarCollapsed ? 0 : TOP_BAR_FADE_IN_DELAY
-        })
-        .margin({
-          top: this.homeHideTopBar && this.topBarCollapsed ? 0 : 5,
-          bottom: this.homeHideTopBar && this.topBarCollapsed ? -5 : 5
-        })
-        .height(this.homeHideTopBar && this.topBarCollapsed ? 0 : 44)
-        .animation({ duration: TOP_BAR_MOTION_DURATION, curve: TOP_BAR_MOTION_CURVE })
-
-        if (this.homeTabs.length > 1) {
-          this.categoryTabs()
-        }
+    Column() {
+      Row({ space: 8 }) {
+        Search({ value: this.homeSearchText, placeholder: '搜索' })
+          .cancelButton({ style: CancelButtonStyle.INVISIBLE })
+          .focusable(false)
+          .enableKeyboardOnFocus(false)
+          .searchIcon(new SymbolGlyphModifier($r('sys.symbol.magnifyingglass'))
+            .fontColor([this.navSelected]).fontSize(16))
+          .placeholderColor($r('app.color.placeholder_text'))
+          .placeholderFont({ size: 16, weight: 600 })
+          .fontColor($r('app.color.placeholder_text'))
+          .textFont({ size: 16, weight: 600 })
+          .backgroundColor(Color.Transparent)
+          .borderRadius(22)
+          .layoutWeight(1)
+          .height(44)
+          .systemMaterial(topBarMaterial(true))
+          .onClick(() => {
+            this.context.eventHub.emit(EVENT_TOP_SEARCH);
+          })
+        this.msgButton()
+        this.avatarButton()
       }
       .width('100%')
-      .padding({ top: this.statusBarHeight})
-      .id('topBarContent')
-      .hitTestBehavior(HitTestMode.Default)
-      .align(Alignment.Top)
+      .padding({
+        left: 14,
+        right: 14 + this.titleButtonInset,
+      })
+      .opacity(this.homeHideTopBar && this.topBarCollapsed ? 0 : 1)
+      // .animation() 只作用于它之前、上一个 .animation() 之后的属性，
+      // 故透明度与高度可以各走一套节奏
+      .animation({
+        duration: TOP_BAR_FADE_DURATION,
+        curve: Curve.Sharp,
+        delay: this.homeHideTopBar && this.topBarCollapsed ? 0 : TOP_BAR_FADE_IN_DELAY
+      })
+      .margin({
+        top: this.homeTabs.length > 1 ? 5 : 9,
+        bottom: 5
+      })
+      .height(44)
+      .animation({ duration: TOP_BAR_MOTION_DURATION, curve: TOP_BAR_MOTION_CURVE })
+
+      if (this.homeTabs.length > 1) {
+        this.categoryTabs()
+      }
     }
-    .height(this.topBarHeight())
-    .animation({ duration: TOP_BAR_MOTION_DURATION, curve: TOP_BAR_MOTION_CURVE })
     .width('100%')
+    .padding({ top: this.statusBarHeight})
+    // 自绘标题带压在窗口最顶部（不吃布局），顶栏内容需整体下移一个标题带高度
+    .margin({ top: this.titleBarHeight })
+    .id('topBarContent')
     .hitTestBehavior(HitTestMode.Default)
     .align(Alignment.Top)
   }
@@ -616,39 +637,47 @@ struct Index {
   /// 标题栏内部的节点才能回到原地更新，沿用既有的 .animation() 写法。
   @Builder
   homeTopBarHost() {
-    Column() {
-      Navigation() {
-        // 空内容区：BarStyle.STACK 下被标题栏完全覆盖，不参与触摸测试
-        Column()
-          .width('100%')
-          .height('100%')
-          .hitTestBehavior(HitTestMode.None)
-      }
-      // 宽窗口下默认的 Auto 会分栏，强制 Stack 保持单栏标题栏布局
-      .mode(NavigationMode.Stack)
-      .hideBackButton(true)
-      .hideToolBar(true)
-      // 显式给出标题栏高度，避免自定义标题被压回默认 56vp；
-      // 不设 menus，paddingStart/paddingEnd 才能把标题栏默认左右边距清零
-      .title({ builder: this.homeTopBar, height: TOP_BAR_EXPANDED_HEIGHT }, {
-        barStyle: BarStyle.STACK,
-        paddingStart: LengthMetrics.vp(0),
-        paddingEnd: LengthMetrics.vp(0)
-      })
-      // 状态栏避让由顶栏内部的 statusBarHeight padding 负责，避免重复加一层
-      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP])
-      .backgroundColor(Color.Transparent)
-      .width('100%')
-      .height(TOP_BAR_EXPANDED_HEIGHT)
+    HdsNavigation() {
+      // 空内容区：BarStyle.STACK 下被标题栏完全覆盖，不参与触摸测试
+      Column()
+        .width('100%')
+        .height('100%')
+        .hitTestBehavior(HitTestMode.None)
     }
-    .width('100%')
-    // 收缩在这里做：普通容器高度，隐式动画正常生效；clip 让收起后露出的
-    // 那段标题栏既不绘制也不参与触摸测试，触摸照常落到下方 FlutterPage
-    .height(this.topBarHeight())
-    .clip(true)
+    // 宽窗口下默认的 Auto 会分栏，强制 Stack 保持单栏标题栏布局
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .titleBar({
+      style: {
+        scrollEffectOpts: {
+          enableScrollEffect: false,
+          scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
+        },
+        originalStyle: {
+          backgroundStyle: {
+            backgroundColor: $r('app.color.start_window_background'),
+            blurRadius: TOP_BAR_BLUR_RADIUS
+          }
+        },
+        systemMaterialEffect: {
+          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
+          materialType: hdsMaterial.MaterialType.IMMERSIVE
+        }
+      },
+      content: {
+        stackBuilder: (): void => this.homeTopBar(),
+      }
+    })
+    // 状态栏避让由顶栏内部的 statusBarHeight padding 负责，避免重复加一层
+    .margin({ top: this.topBarCollapsed? TOP_BAR_COLLAPSED_HEIGHT-TOP_BAR_EXPANDED_HEIGHT : 0 })
     .animation({ duration: TOP_BAR_MOTION_DURATION, curve: TOP_BAR_MOTION_CURVE })
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP])
+    .width('100%')
+    .height(TOP_BAR_EXPANDED_HEIGHT)
     .visibility(this.topBarHidden ? Visibility.None : Visibility.Visible)
     .align(Alignment.Top)
+    .clip(true)
   }
 
   private topBarHeight(): number {
@@ -817,7 +846,7 @@ struct Index {
         .width('100%')
         .padding({
           left: 14,
-          right: 14,
+          right: 14 + this.titleButtonInset,
         })
         .opacity(this.homeHideTopBar && this.topBarCollapsed ? 0 : 1)
         .animation({
@@ -838,6 +867,8 @@ struct Index {
       }
       .width('100%')
       .padding({ top: this.statusBarHeight})
+      // 自绘标题带压在窗口最顶部（不吃布局），顶栏内容需整体下移一个标题带高度
+      .margin({ top: this.titleBarHeight })
       .id('topBarContent')
       .hitTestBehavior(HitTestMode.Default)
       .align(Alignment.Top)
@@ -926,6 +957,11 @@ struct Index {
         this.homeTopBarHost()
       } else if (this.useNativeTopBar && deviceInfo.sdkApiVersion >= 23) {
         this.homeTopBarHdsHost()
+      }
+      // 自绘标题带：自由窗口形态下替代被隐藏的系统标题栏，压在顶栏之上
+      if (this.titleBarVisible) {
+        WindowTitleBar()
+          .align(Alignment.Top)
       }
       // 转屏遮罩
       if (this.rotationMask !== null) {

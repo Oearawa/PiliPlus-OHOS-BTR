@@ -1,4 +1,4 @@
-import { common, ConfigurationConstant } from "@kit.AbilityKit";
+import { common, ConfigurationConstant, wantConstant } from "@kit.AbilityKit";
 import { formProvider } from "@kit.FormKit";
 import { BusinessError } from "@kit.BasicServicesKit";
 import { fileIo, fileUri, picker } from "@kit.CoreFileKit";
@@ -8,6 +8,8 @@ import window from "@ohos.window";
 import { FlutterAbility, FlutterEngine, MethodChannel } from "@ohos/flutter_ohos";
 import { GeneratedPluginRegistrant } from "../plugins/GeneratedPluginRegistrant";
 import HarmonyChannel from "../plugins/HarmonyChannel";
+import { windowChrome } from "../window/WindowChrome";
+import { windowState } from "../window/WindowState";
 
 /// 跨设备接续数据在 want.parameters 中的键
 const CONTINUATION_KEY = "pili_continuation";
@@ -41,6 +43,35 @@ export default class EntryAbility extends FlutterAbility {
   wasWindowMode: boolean = false;
   private flutterChannel: MethodChannel | null = null;
   private envChangeListener: number | null = null;
+  private window: window.Window | null = null;
+  /// 窗口是否已初始化（onWindowStageCreate 已跑过）。接续热启动会在
+  /// onNewWant 之后再次触发 onWindowStageRestore，必须靠它拦住重复初始化，
+  /// 见 [onWindowStageRestore]。窗口销毁时复位。
+  private windowStageReady: boolean = false;
+  /// windowStatusChange 的具名回调，销毁时要 off 掉，否则同一窗口上会随
+  /// 窗口重建堆积多份监听（重复推送窗口模式/自由窗口事件）。
+  private windowStatusCallback = (type: window.WindowStatusType): void => {
+    // 窗口状态变化后重算外观状态（自由窗口/最大化/内容全屏 → 自绘标题带显隐）
+    windowChrome.sync();
+    windowState.refreshStatus();
+    if (type == window.WindowStatusType.FLOATING && !this.wasFloatingWindow) {
+      this.harmonyChannel.onFloatingWindowChange(true);
+      this.wasFloatingWindow = true;
+    } else if (this.wasFloatingWindow && type != window.WindowStatusType.FLOATING) {
+      this.harmonyChannel.onFloatingWindowChange(false);
+      this.wasFloatingWindow = false;
+    }
+    // 应用窗口是否处于受限窗口模式（分屏/自由多窗/悬浮窗等非全屏窗口）。
+    // 此模式下窗口宽高比不代表设备方向，且窗口无法旋转到全屏横屏
+    // 此处用于修复全屏时视频与页面没变
+    const isWindowMode =
+      type == window.WindowStatusType.SPLIT_SCREEN ||
+      type == window.WindowStatusType.FLOATING;
+    if (isWindowMode != this.wasWindowMode) {
+      this.wasWindowMode = isWindowMode;
+      this.harmonyChannel.onWindowModeChange(isWindowMode);
+    }
+  };
 
   configureFlutterEngine(flutterEngine: FlutterEngine) {
     super.configureFlutterEngine(flutterEngine);
@@ -104,10 +135,23 @@ export default class EntryAbility extends FlutterAbility {
   }
 
   /**
-   * 接续冷启动的窗口恢复回调。FlutterAbility 未实现此回调（不使用
-   * ArkUI 页面栈），按正常创建流程初始化 Flutter 视图并加载页面。
+   * 接续时的窗口恢复回调。系统在 onCreate（冷启动）**或** onNewWant（热启动）
+   * 之后触发本回调而不是 onWindowStageCreate，两种情形都必须能正常加载窗口。
+   *
+   * 但窗口只允许初始化一次：热启动时窗口与 Flutter 引擎早已就绪，若在这里
+   * 再走一遍 onWindowStageCreate，FlutterAbility 会重新 createView()（新
+   * FlutterView id）+ 再次 loadContent()，得到两个 FlutterView 挂同一个
+   * engine、ability↔view 映射失配；PC 自由窗口下还会重复下发同步窗口装饰
+   * 接口（PostSyncTask 阻塞 ArkUI 线程），表现为接续后整机卡死。
+   * 故已初始化过就只补齐窗口外观状态，不再重建。
    */
   onWindowStageRestore(windowStage: window.WindowStage): void {
+    if (this.windowStageReady) {
+      console.info('EntryAbility', 'onWindowStageRestore: window stage already initialized, skip re-create');
+      windowChrome.sync();
+      windowState.refreshStatus();
+      return;
+    }
     this.onWindowStageCreate(windowStage);
   }
 
@@ -177,10 +221,24 @@ export default class EntryAbility extends FlutterAbility {
       return AbilityConstant.OnContinueResult.REJECT;
     }
     wantParam[CONTINUATION_KEY] = state;
+    // 不迁移页面栈：默认 true 会让系统接管页面栈恢复，但本应用用 Flutter
+    // 自绘路由，ArkUI 侧只有 Index 一个页面，系统恢复页面栈会与
+    // restoreWindowStage / 自绘标题带重建冲突。跳转完全由 Dart 侧按
+    // CONTINUATION_KEY 里的播放状态完成。
+    wantParam[wantConstant.Params.SUPPORT_CONTINUE_PAGE_STACK_KEY] = false;
     return AbilityConstant.OnContinueResult.AGREE;
   }
 
   async onWindowStageCreate(windowStage: window.WindowStage): Promise<void> {
+    // 幂等：接续热启动会在 onNewWant 之后再次触发 onWindowStageRestore，
+    // 而该回调会走到这里。窗口与引擎此时已就绪，再初始化一次会重建
+    // FlutterView、重复 loadContent、重复挂窗口监听，PC 自由窗口下还会
+    // 重复下发同步窗口装饰接口，直接把主线程卡死在 appfreeze。
+    if (this.windowStageReady) {
+      console.info('EntryAbility', 'onWindowStageCreate: already initialized, skip');
+      return;
+    }
+    this.windowStageReady = true;
     super.onWindowStageCreate(windowStage);
     let w = windowStage.getMainWindowSync();
     // 窗口尺寸记忆：交系统托管，冷启动时按上次关闭的主窗尺寸/状态恢复。
@@ -201,28 +259,14 @@ export default class EntryAbility extends FlutterAbility {
     }).catch((err: BusinessError) => {
       console.error(`setWindowSystemBarProperties failed: ${err.code} ${err.message}`);
     });
-    this.hideWindowDecorIfFloating(w);
-    w.on("windowStatusChange", (type) => {
-      // 原生先行隐藏，避免 Dart 侧（首帧前）下发前装饰栏先露一下
-      this.hideWindowDecorIfFloating(w, type);
-      if (type == window.WindowStatusType.FLOATING && !this.wasFloatingWindow) {
-        this.harmonyChannel.onFloatingWindowChange(true);
-        this.wasFloatingWindow = true;
-      } else if (this.wasFloatingWindow && type != window.WindowStatusType.FLOATING) {
-        this.harmonyChannel.onFloatingWindowChange(false);
-        this.wasFloatingWindow = false;
-      }
-      // 应用窗口是否处于受限窗口模式（分屏/自由多窗/悬浮窗等非全屏窗口）。
-      // 此模式下窗口宽高比不代表设备方向，且窗口无法旋转到全屏横屏
-      // 此处用于修复全屏时视频与页面没变
-      const isWindowMode =
-        type == window.WindowStatusType.SPLIT_SCREEN ||
-        type == window.WindowStatusType.FLOATING;
-      if (isWindowMode != this.wasWindowMode) {
-        this.wasWindowMode = isWindowMode;
-        this.harmonyChannel.onWindowModeChange(isWindowMode);
-      }
-    });
+    // 装饰栏/标题带/最大化状态由 WindowChrome 统一维护，这里只做挂载；
+    // 窗口状态（分屏/小窗）与安全区由 WindowState 订阅并推送给 Flutter。
+    // 装饰栏的真正下发时机是内容加载完成（Index.aboutToAppear 调
+    // windowChrome.onContentLoaded），此前接口调用不生效。
+    windowChrome.attach(w);
+    windowState.attach(w, windowChrome);
+    this.window = w;
+    w.on("windowStatusChange", this.windowStatusCallback);
     // 应用启动时可能已处于分屏/多窗状态（如从分屏入口拉起），补发初始窗口模式
     try {
       const initStatus = w.getWindowStatus();
@@ -249,31 +293,39 @@ export default class EntryAbility extends FlutterAbility {
   }
 
   /**
-   * 自由多窗（FLOATING）/ 最大化（MAXIMIZE，2in1）下提前隐藏系统装饰栏。
-   *
-   * 策略的唯一维护者是 Dart 侧 HarmonyChannel._syncWindowDecor → 原生
-   * HarmonyChannel.setWindowDecorVisible（直接调官方 window.setWindowDecorVisible）。
-   * 这里只是在窗口创建 / 进入自由窗口的第一时间先隐藏一次，否则 Dart 首帧前
-   * 装饰栏会先出现再收回。非自由窗口不调用：手机全屏下该接口会抛 1300004。
+   * 窗口舞台销毁（窗口被真正重建而非复用）时复位初始化标记，让下一次
+   * onWindowStageCreate 能正常重建；顺带把窗口级监听摘干净。
    */
-  private hideWindowDecorIfFloating(w: window.Window, status?: window.WindowStatusType): void {
-    if (status === undefined) {
+  onWindowStageDestroy(): void {
+    this.windowStageReady = false;
+    if (this.window !== null) {
       try {
-        status = w.getWindowStatus();
+        this.window.off("windowStatusChange", this.windowStatusCallback);
       } catch (err) {
-        return;
+        console.error('EntryAbility', `off windowStatusChange failed: ${err}`);
       }
+      this.window = null;
     }
-    if (status != window.WindowStatusType.FLOATING && status != window.WindowStatusType.MAXIMIZE) {
-      return;
-    }
-    this.harmonyChannel.setWindowDecorVisible(false);
+    windowChrome.detach();
+    windowState.detach();
+    super.onWindowStageDestroy();
   }
 
   onDestroy(): void {
     if (this.envChangeListener !== null) {
       this.context.getApplicationContext().off('environment', this.envChangeListener);
     }
+    if (this.window !== null) {
+      try {
+        this.window.off("windowStatusChange", this.windowStatusCallback);
+      } catch (err) {
+        console.error('EntryAbility', `off windowStatusChange failed: ${err}`);
+      }
+    }
+    this.windowStageReady = false;
+    this.window = null;
+    windowChrome.detach();
+    windowState.detach();
     super.onDestroy();
   }
 }

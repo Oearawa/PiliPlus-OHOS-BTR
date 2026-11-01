@@ -7,6 +7,9 @@ import 'package:PiliPlus/common/widgets/custom_toast.dart';
 import 'package:PiliPlus/common/widgets/route_aware_mixin.dart';
 import 'package:PiliPlus/common/widgets/scale_app.dart';
 import 'package:PiliPlus/common/widgets/scroll_behavior.dart';
+import 'package:PiliPlus/harmony/window/system_bars.dart';
+import 'package:PiliPlus/harmony/window/title_bar_color.dart';
+import 'package:PiliPlus/harmony/window/window_bridge.dart';
 import 'package:PiliPlus/harmony_adapt/harmony_channel.dart';
 import 'package:PiliPlus/harmony_adapt/shell_bars_observer.dart';
 import 'package:PiliPlus/http/init.dart';
@@ -80,7 +83,12 @@ Future<void> _initDownPath() async {
       downloadPath = defDownloadPath;
     }
   } else if (OS.isHarmony) {
-    downloadPath = 'storage/Users/currentUser/Download/com.example.piliplus';
+    // 主应用与分身应用共用包名，但分身应用不允许访问下载目录：只有主应用能
+    // 落到系统的 Download/<bundle>，分身仍走应用私有目录。
+    await HarmonyChannel.loadAppCloneIndex();
+    downloadPath = HarmonyChannel.isAppClone
+        ? defDownloadPath
+        : 'storage/Users/currentUser/Download/com.example.piliplus';
   } else if (Platform.isAndroid) {
     final externalStorageDirPath = (await getExternalStorageDirectory())?.path;
     downloadPath = externalStorageDirPath != null
@@ -159,13 +167,19 @@ void main() async {
 
   FocusManager.instance.addEarlyKeyEventHandler(_onKeyEvent);
 
+  if (OS.isHarmony) {
+    // 鸿蒙窗口域初始化（唯一入口）：按窗口状态选系统栏模式（自由多窗下隐藏
+    // 系统装饰栏进入沉浸，否则 edgeToEdge），再拉窗口快照与安全区，据此定下
+    // 小窗缩放与装饰栏策略。必须在首帧前一次到位——先 edgeToEdge 再改会让装
+    // 饰栏先出现再收回。内部顺序见 WindowBridge.init。
+    //
+    // 放在 isMobile 判断之外：2in1 设备 isPCOS 为 true、isMobile 为 false，
+    // 但窗口形态（自由多窗/分屏）同样存在，不能跳过。
+    await WindowBridge.init();
+  }
+
   if (PlatformUtils.isMobile) {
-    if (OS.isHarmony) {
-      // 鸿蒙按窗口状态选系统栏模式：自由多窗下隐藏系统装饰栏（沉浸），否则
-      // edgeToEdge。必须在首帧前一次到位——先 edgeToEdge 再改会让装饰栏先
-      // 出现再收回。见 HarmonyChannel.initWindowState / _syncWindowDecor。
-      await HarmonyChannel.initWindowState();
-    } else {
+    if (!OS.isHarmony) {
       SystemChrome.setEnabledSystemUIMode(.edgeToEdge);
     }
     SystemChrome.setSystemUIOverlayStyle(
@@ -248,6 +262,11 @@ void main() async {
       HarmonyChannel.loadDisplayHdrFormats();
       // 将当前主题颜色模式同步给原生层（Rx 初始值相同不触发监听，需显式同步）
       ThemeUtils.syncColorModeToNative();
+      // 把主题背景色下发给原生自绘标题带，并跟随主题/系统深浅色变化重发
+      TitleBarColor.attach();
+      // 首帧后对账一次系统栏期望：engine 重建 / 热重启后原生侧可能还停在上一
+      // 个会话的「已隐藏」，Dart 侧状态已归零，需主动下发一次让两边收敛
+      SystemBars.resync(hidden: !showSystemBar_);
     });
   }
 }

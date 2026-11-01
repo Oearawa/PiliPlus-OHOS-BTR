@@ -35,6 +35,10 @@ class _Cdn {
   /// Send half of the body, then wait longer than the stall timeout.
   bool stallBody = false;
 
+  /// Stall only the first request, so a retry can be observed.
+  bool stallBodyOnce = false;
+  int _stalled = 0;
+
   Uri get uri => Uri.parse('http://127.0.0.1:${server.port}/media.m4s');
 
   Future<void> start() async {
@@ -77,7 +81,9 @@ class _Cdn {
       );
       response.headers.contentLength = end - start + 1;
       final Uint8List body = Uint8List.sublistView(source, start, end + 1);
-      if (stallBody && body.length > 1) {
+      final bool stallThisTime = stallBody || (stallBodyOnce && _stalled == 0);
+      if (stallThisTime && body.length > 1) {
+        _stalled += 1;
         final int half = body.length ~/ 2;
         response.add(Uint8List.sublistView(body, 0, half));
         await response.flush();
@@ -226,15 +232,44 @@ void main() {
           stall: const Duration(milliseconds: 120),
         );
         cdn.stallBody = true;
+        // The verified prefix is kept for a resume, so the failure surfaces as
+        // a partial rather than as a plain HTTP error.
         await expectLater(
           engine.downloadRange(const ByteRange(0, 65535), resolver),
-          throwsA(isA<RipperHttpException>()),
+          throwsA(isA<RipperPartialException>()),
         );
         expect(statuses, contains(-2));
         expect(statuses, isNot(contains(-1)));
         engine.close();
       },
     );
+
+    test('a stalled body resumes from the verified prefix', () async {
+      final IdmDownloader engine = downloader(
+        concurrency: 1,
+        maxRounds: 3,
+        stall: const Duration(milliseconds: 120),
+      );
+      // One piece of 64 KiB: the first attempt stalls after half of it, the
+      // retry is served normally.
+      cdn.stallBodyOnce = true;
+      final BytesBuilder received = BytesBuilder(copy: false);
+      final DownloadResult result = await engine.downloadRange(
+        const ByteRange(0, 65535),
+        resolver,
+        onOrderedChunk: (Uint8List bytes, ByteRange piece, int? total) {
+          received.add(bytes);
+        },
+      );
+      expect(received.takeBytes(), source.sublist(0, 65536));
+      expect(result.byteLength, 65536);
+      // The resume asked only for the tail, so the piece was never fetched
+      // twice from the start.
+      expect(cdn.ranges.length, 2);
+      expect(cdn.ranges.first, 'bytes=0-65535');
+      expect(cdn.ranges.last, 'bytes=32768-65535');
+      engine.close();
+    });
   });
 
   group('server pushback and recovery', () {

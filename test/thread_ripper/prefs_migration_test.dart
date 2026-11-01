@@ -4,7 +4,7 @@
 // the CDN mode as a label, a thread count that is not on the ladder). These
 // tests pin the normalization rules without touching Hive.
 
-import 'package:PiliPlus/services/thread_ripper/prefs.dart';
+import 'package:PiliPlus/services/thread_ripper/settings_model.dart';
 import 'package:PiliPlus/services/thread_ripper/range_core.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -28,32 +28,32 @@ void main() {
     test('accepts bool, 0/1 and the usual strings', () {
       expect(
         normalizeStoredSettings(<String, Object?>{
-          RipperPrefs.enabledKey: 1,
+          kRipperEnabledKey: 1,
         }).enabled,
         isTrue,
       );
       expect(
         normalizeStoredSettings(<String, Object?>{
-          RipperPrefs.enabledKey: 'true',
+          kRipperEnabledKey: 'true',
         }).enabled,
         isTrue,
       );
       expect(
         normalizeStoredSettings(<String, Object?>{
-          RipperPrefs.autoConcurrencyKey: 0,
+          kRipperAutoConcurrencyKey: 0,
         }).autoConcurrency,
         isFalse,
       );
       expect(
         normalizeStoredSettings(<String, Object?>{
-          RipperPrefs.episodeEnabledKey: 'off',
+          kRipperEpisodeEnabledKey: 'off',
         }).episodeEnabled,
         isFalse,
       );
       // An unreadable value falls back to the documented default.
       expect(
         normalizeStoredSettings(<String, Object?>{
-          RipperPrefs.autoConcurrencyKey: 'maybe',
+          kRipperAutoConcurrencyKey: 'maybe',
         }).autoConcurrency,
         isTrue,
       );
@@ -61,7 +61,7 @@ void main() {
 
     test('a rewritten value reports a change', () {
       final RipperStoredSettings settings = normalizeStoredSettings(
-        <String, Object?>{RipperPrefs.enabledKey: 1},
+        <String, Object?>{kRipperEnabledKey: 1},
       );
       expect(settings.enabled, isTrue);
       expect(settings.changed, isTrue);
@@ -73,7 +73,7 @@ void main() {
       for (final int value in RipperSettings.allowedConcurrency) {
         expect(
           normalizeStoredSettings(<String, Object?>{
-            RipperPrefs.concurrencyKey: value,
+            kRipperConcurrencyKey: value,
           }).concurrency,
           value,
         );
@@ -83,38 +83,38 @@ void main() {
     test('snaps a legacy value to the nearest rung', () {
       expect(
         normalizeStoredSettings(<String, Object?>{
-          RipperPrefs.concurrencyKey: 10,
+          kRipperConcurrencyKey: 10,
         }).concurrency,
         8,
       );
       expect(
         normalizeStoredSettings(<String, Object?>{
-          RipperPrefs.concurrencyKey: 14,
+          kRipperConcurrencyKey: 14,
         }).concurrency,
         12,
       );
       expect(
         normalizeStoredSettings(<String, Object?>{
-          RipperPrefs.concurrencyKey: 44,
+          kRipperConcurrencyKey: 44,
         }).concurrency,
         48,
       );
       expect(
         normalizeStoredSettings(<String, Object?>{
-          RipperPrefs.concurrencyKey: 1000,
+          kRipperConcurrencyKey: 1000,
         }).concurrency,
         64,
       );
       // A tie rounds down so a legacy value never doubles the connections.
       expect(
         normalizeStoredSettings(<String, Object?>{
-          RipperPrefs.concurrencyKey: 6,
+          kRipperConcurrencyKey: 6,
         }).concurrency,
         4,
       );
       expect(
         normalizeStoredSettings(<String, Object?>{
-          RipperPrefs.concurrencyKey: '16',
+          kRipperConcurrencyKey: '16',
         }).concurrency,
         16,
       );
@@ -125,31 +125,31 @@ void main() {
     test('accepts numeric and labelled modes', () {
       expect(
         normalizeStoredSettings(<String, Object?>{
-          RipperPrefs.modeKey: 0,
+          kRipperModeKey: 0,
         }).modeIndex,
         0,
       );
       expect(
         normalizeStoredSettings(<String, Object?>{
-          RipperPrefs.modeKey: 'mainland',
+          kRipperModeKey: 'mainland',
         }).modeIndex,
         0,
       );
       expect(
         normalizeStoredSettings(<String, Object?>{
-          RipperPrefs.modeKey: '海外',
+          kRipperModeKey: '海外',
         }).modeIndex,
         1,
       );
       expect(
         normalizeStoredSettings(<String, Object?>{
-          RipperPrefs.modeKey: '自定义',
+          kRipperModeKey: '自定义',
         }).modeIndex,
         2,
       );
       expect(
         normalizeStoredSettings(<String, Object?>{
-          RipperPrefs.modeKey: 9,
+          kRipperModeKey: 9,
         }).modeIndex,
         1,
       );
@@ -158,7 +158,7 @@ void main() {
     test('keeps only whitelisted hosts, deduplicated', () {
       final RipperStoredSettings settings = normalizeStoredSettings(
         <String, Object?>{
-          RipperPrefs.customHostsKey: <Object?>[
+          kRipperCustomHostsKey: <Object?>[
             'upos-sz-mirrorhw.bilivideo.com',
             'https://upos-sz-mirrorhw.bilivideo.com',
             'evil.example.com',
@@ -176,7 +176,7 @@ void main() {
 
     test('a non-list host value becomes an empty list', () {
       final RipperStoredSettings settings = normalizeStoredSettings(
-        <String, Object?>{RipperPrefs.customHostsKey: 'upos-sz-mirrorhw'},
+        <String, Object?>{kRipperCustomHostsKey: 'upos-sz-mirrorhw'},
       );
       expect(settings.customHosts, isEmpty);
       expect(settings.changed, isTrue);

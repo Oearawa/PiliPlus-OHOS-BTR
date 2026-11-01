@@ -16,6 +16,7 @@ import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/http/live.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/video.dart';
+// 本地 media_kit fork 的 getProperty 只在 NativePlayer 上（异步）。
 import 'package:PiliPlus/media_kit_adapt/media_kit_adapt.dart';
 import 'package:PiliPlus/models/common/super_resolution_type.dart';
 import 'package:PiliPlus/models/common/video/audio_quality.dart';
@@ -64,7 +65,7 @@ import 'package:canvas_danmaku/canvas_danmaku.dart';
 import 'package:collection/collection.dart';
 import 'package:dio/dio.dart';
 import 'package:easy_debounce/easy_throttle.dart';
-import 'package:file_picker_ohos/file_picker_ohos.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:floating/floating.dart';
 import 'package:flutter/foundation.dart' show compute, kDebugMode;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
@@ -441,12 +442,13 @@ class HeaderControlState extends State<HeaderControl>
                       ? ShutdownPanel(
                           buildCountdownText: (text) =>
                               Text(text == null ? '已结束' : '剩余 $text'),
-                          builder: (
-                            context,
-                            countdown,
-                            onCountdown,
-                            setState,
-                          ) => countdown,
+                          builder:
+                              (
+                                context,
+                                countdown,
+                                onCountdown,
+                                setState,
+                              ) => countdown,
                         )
                       : null,
                 ),
@@ -2078,8 +2080,7 @@ class HeaderControlState extends State<HeaderControl>
                           }
                           if (!context.mounted) return;
                           final status = await plPlayerController.enterPip();
-                          if (OS.isHarmony &&
-                              status == PiPStatus.unavailable) {
+                          if (OS.isHarmony && status == PiPStatus.unavailable) {
                             // 系统小窗（自由窗口）内画中画无法启动，插件会拒绝
                             SmartDialog.showToast('当前处于系统小窗，无法进入画中画');
                           }
