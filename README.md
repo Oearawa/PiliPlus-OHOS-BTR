@@ -76,12 +76,6 @@ PiliPlus 是用 Flutter 编写的 B 站第三方客户端。`dev4harmony/PiliPlu
 | **失败分块恢复** | `maxRounds` 轮次重试 | 失败分片进入下一轮，节点按失败次数降权后重排 |
 | **下载任务协调** | `RipperSemaphore` + `trackKey` 单飞 | 视频与音频共用连接预算，同轨道同字节区间只下载一次 |
 
-几条边界规则（都在代码里，不是宣传语）：
-
-- **默认关闭**。总开关不打开时，播放行为与基线完全一致。
-- `412 / 429` 立刻退档并冷却 180 秒；首字节超时退一档冷却 60 秒；传输卡顿与首字节超时分开上报。
-- 直播、本地文件、HLS/FLV、DRM 与试看集数**不会**进入 BTR。
-- 本地端点打开失败会自动回退直连，加速器不会让视频放不出来。
 
 ## 安装
 
@@ -114,7 +108,6 @@ PiliPlus 是用 Flutter 编写的 B 站第三方客户端。`dev4harmony/PiliPlu
 | 剧集加速 | 开 | 允许可播的 PGC 集数走 BTR（DRM/试看仍直连） |
 
 打开后可在同一页面查看**诊断信息**：当前档位、饱和占比、最近一次调档原因、冷却中的档位与实测吞吐。
-这些数字来自真实会话，没有会话时显示为空，不会编造。
 
 ## 编译
 
@@ -159,14 +152,6 @@ $env:PATH = 'C:\Program Files\Huawei\DevEco Studio\tools\hvigor\bin;' +
 
 更多构建与依赖细节见 [docs/BUILD.md](docs/BUILD.md) 与
 [docs/OHOS_DEPENDENCY_RECOVERY_REPORT.md](docs/OHOS_DEPENDENCY_RECOVERY_REPORT.md)。
-
-### 测试
-
-```bash
-flutter test test/thread_ripper   # BTR 专项
-flutter test                      # 全量
-dart analyze lib test
-```
 
 ## 来源与版本
 
