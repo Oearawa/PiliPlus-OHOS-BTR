@@ -125,7 +125,8 @@
 ## 9. 执行约束核对
 
 - 未修改 `dev4harmony/PiliPlus` 与 `MrTangLuyao/Bilibili-thread-ripper` 任何内容。
-- 未向 `dev4harmony/PiliPlus` 推送；`origin/ohos` 仍为 `0aba2c6d` 之前的状态，仅做过 fetch。
+- 未向 `dev4harmony/PiliPlus` 推送；`origin/ohos` 仅因 `git fetch` 更新到 `a8431412`
+  （上游 11-01 的 `Release 2.1.6.2-ohos-2`），本仓库没有对其执行任何写操作。
 - 未删除任何已有 Tag / Release；未覆盖 `v0.1.0-beta.1`。
 - 未强推，`main` 为快进更新（`068a52f0..5613717`）。
 - 未修改 BTR 核心逻辑（`lib/services/thread_ripper/` 本轮零改动）。
