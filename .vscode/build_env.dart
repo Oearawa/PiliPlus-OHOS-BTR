@@ -29,7 +29,8 @@ void main() async {
   // 本项目是独立发布线，应用内「关于」显示自己的版本标签，
   // 不再沿用基线 PiliPlus 的 2.1.6.2-ohos，避免按错误版本反馈问题。
   // 已并入上游 2.1.6.2-ohos-2 的功能（2026-11-01），版本标签仍走本线。
-  const versionName = '0.1.0-beta.1';
+  // 0.2.0-beta.1：同步上游 + 移植 BTR 2026.11.1.1 下载器改进后的小版本迭代。
+  const versionName = '0.2.0-beta.1';
 
   // 通过 git 命令获取 hash 和 code
   final versionCode = await _getGitCommitCount();

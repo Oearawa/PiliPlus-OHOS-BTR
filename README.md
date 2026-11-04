@@ -1,102 +1,155 @@
 <div align="center">
-    <img width="160" height="160" src="assets/images/logo/logo.png">
-    <h1>PiliPlus OHOS BTR</h1>
-    <p>PiliPlus 鸿蒙分支 + BTR 多线程下载与自适应并发调度</p>
-    <p><code>v0.1.0-beta.1</code> · 首个测试版</p>
+  <img src="assets/images/logo/logo.png" width="110" alt="PiliPlus OHOS BTR" />
+
+  <h1>PiliPlus OHOS BTR</h1>
+
+  <p>基于 PiliPlus 鸿蒙适配版，融合 Bilibili Thread Ripper 下载调度技术的 HarmonyOS 客户端</p>
+
+  <p>
+    <img alt="HarmonyOS" src="https://img.shields.io/badge/HarmonyOS-API%2026-000000?logo=harmonyos&logoColor=white" />
+    <img alt="Flutter" src="https://img.shields.io/badge/Flutter-3.44.9-02569B?logo=flutter&logoColor=white" />
+    <img alt="Dart" src="https://img.shields.io/badge/Dart-3.12.2-0175C2?logo=dart&logoColor=white" />
+    <img alt="BTR" src="https://img.shields.io/badge/BTR-2026.11.1.1-FF6699" />
+    <img alt="License" src="https://img.shields.io/badge/License-GPL--3.0-blue" />
+    <img alt="Release" src="https://img.shields.io/github/v/release/Oearawa/PiliPlus-OHOS-BTR?include_prereleases&label=release&color=orange" />
+  </p>
 </div>
 
-> [!WARNING]
-> 这是**独立维护**的融合项目，不是 `dev4harmony/PiliPlus` 的官方分支，也不向该仓库回推。
->
-> 当前版本为非签名的测试版 HAP，**未做真机安装验证**，请只在你愿意承担风险的情况下安装。
-> 首次启动后 BTR 处于**关闭**状态，不改变原有播放行为。
+> [!IMPORTANT]
+> 本项目**独立维护**，不属于 `dev4harmony/PiliPlus` 官方分支，也不向其回推任何代码。
+> 所有改动仅发布在本仓库。
 
-## 项目定位
+## 下载
 
-PiliPlus 的鸿蒙适配版把播放链路交给 `media_kit` + mpv，视频与音频各自是一条 DASH 分片流。
-默认情况下 mpv 对每条流串行 Range 请求，单连接带宽和高延迟节点下的启动速度都不理想。
+| 最新版本 | 发布日期 | 产物 | 大小 | 签名 |
+| :--- | :--- | :--- | :--- | :--- |
+| **v0.2.0-beta.1** | 2026-11-04 | HAP（arm64-v8a） | 30.0 MB | 未签名 |
 
-本项目在这条真实播放链路上加一层本地回环 HTTP 端点，把 BTR
-（[Bilibili-thread-ripper](https://github.com/MrTangLuyao/Bilibili-thread-ripper)）的
-多线程 Range 下载与自适应并发调度搬进 Dart，让 mpv 照常播放，而字节由多连接并发取回。
+**[⬇ 下载 PiliPlus-OHOS-BTR-v0.2.0-beta.1-unsigned.hap](https://github.com/Oearawa/PiliPlus-OHOS-BTR/releases/latest)**
 
-目标只有一个：**在鸿蒙真机的播放链路里把 BTR 跑通，并且默认不影响原有播放**。
+```text
+SHA-256  (构建完成后填入)
+```
 
-## 来源与职责
+> HAP 未签名，不能直接安装。先用 DevEco Studio 配置自己的证书签名，详见 [安装](#安装)。
+> 本项目尚未在鸿蒙真机做过安装与播放验证，请自行评估风险。
 
-三个来源的定位严格区分，审计时间 2026-10-21：
+## 这是什么
 
-| 来源 | 职责 | 审计提交 | 许可证 | 处理方式 |
-|---|---|---|---|---|
-| [dev4harmony/PiliPlus](https://github.com/dev4harmony/PiliPlus) | 鸿蒙基线 | `0aba2c6db94ba9b4cf9c076b1d39179ee3d860b4`（`ohos`，2026-10-18） | GPL-3.0 | 保留，作为应用主体 |
-| [lemonteaau/PiliPlus](https://github.com/lemonteaau/PiliPlus) | PiliPlus 功能参考 | `f368e92a800d2c5530277a5acf064462e2f6bcd0`（`thread-ripper-2026.9.29.2`，2026-10-02） | GPL-3.0 | 选择性参考，未整包合并 |
-| [MrTangLuyao/Bilibili-thread-ripper](https://github.com/MrTangLuyao/Bilibili-thread-ripper) | 下载与调度算法 | `ee3adaa8cc1afbb29a3d7153e1295e09e42b29e2`（`main`，2026-10-19，`2026.10.19.2`） | MIT | 按鸿蒙架构重写适配 |
+PiliPlus 是用 Flutter 编写的 B 站第三方客户端。`dev4harmony/PiliPlus` 把它适配到了 HarmonyOS，
+本项目以该分支为基线，做两件事：
 
-- **基线继承**：页面、账号、弹幕、播放器外壳、鸿蒙构建配置全部来自基线，本项目不修改它们的语义。
-- **参考实现**：只核对接入形态与已修复的坑（首字节超时合并、只暴露受支持档位、relay 地址不外移等），
-  没有复制该分支的文件。
-- **BTR 算法适配**：`lib/services/thread_ripper/` 是对上游 JS 的 Dart 重写。上游是浏览器脚本，
-  通过替换 `fetch`/`XHR` 或接管 MSE 工作；鸿蒙侧没有这些对象，所以改成
-  **本地 127.0.0.1 端点 + mpv 当作普通媒体 URL 打开**。对应关系见 [docs/BTR.md](docs/BTR.md)。
+1. **跟随鸿蒙基线**——页面、账号、弹幕、播放器外壳、鸿蒙构建配置全部继承自上游，保持同步；
+2. **叠加 BTR 下载层**——把 [Bilibili-thread-ripper](https://github.com/MrTangLuyao/Bilibili-thread-ripper)
+   的多线程 Range 下载与自适应并发调度，从浏览器脚本改写成 Dart，接进鸿蒙版真实的 mpv 播放链路。
 
-## 已实现
+上游 BTR 工作在浏览器里（替换 `fetch`/`XHR`、接管 MSE）。鸿蒙版没有这些对象，所以这里换了一种形态：
+应用在 `127.0.0.1` 上起一个本地 Range 端点，mpv 把它当普通媒体地址打开，字节由多条连接并发取回。
+**播放器本身不需要任何改动。**
 
-以下功能在代码中均有对应实现与测试，不是规划项。
+主要开发语言是 Dart，通过 Flutter OHOS 工具链编译为 HAP。
 
-### 下载核心
+## 功能
 
-- 多范围拆分：按并发把区间切成至少 64 KiB 的片，上限 512 片；分片乱序返回后按序拼接。
-- 严格校验：只接受 HTTP 206，且 `Content-Range` 的起止与请求一致、总长与首次探测一致；
-  200、越界、长度漂移都会被判为失败而不是当作媒体数据。
-- 并发探测（hedge）：首个请求 900 ms 未响应时并发第二个节点请求，谁先回用谁。
-- 轮次重试：失败分片进入下一轮（最多 3 轮），节点按失败次数与延迟排序。
-- 单飞（single-flight）：同一轨道、同一字节区间只下载一次；等待方取消不会中断已开始的传输；
-  视频与音频的相同偏移**不**共享，避免两轨串流。
+### 继承自 PiliPlus 鸿蒙分支
 
-### 自适应并发
+这些是上游能力，本项目只跟随同步，没有额外改造：
 
-- 八档阶梯 `4 / 8 / 12 / 16 / 24 / 32 / 48 / 64`，受 `RipperSemaphore` 单点限流。
-- 升档需要同时满足：缓冲不足、最近的窗口内确实有字节到达（activity 门控，1.5 s）、
-  连接饱和占比 ≥ 60%。缓冲低但完全没有数据到达时不升档，因为那是节点问题不是连接数问题。
-- 升档后做 10 s 试探：吞吐有效提升则保留；吞吐回退立即退档；没有增益时，只有连接确实饱和才退档，
-  否则保持不动，避免来回振荡。
-- 退档与冷却：`412 / 429` 立即退档并冷却 180 s；首字节超时退一档并冷却 90 s；
-  传输中卡顿（`-2`）与首字节超时（`-1`）分开上报，前者属于慢节点，不当作连接过多。
-- 手动模式：不创建自适应控制器，`RipperSemaphore` 固定为用户选择的档位。
+- 视频浏览、播放、选集与画质/音质切换
+- 首页推荐、热门、搜索、番剧与直播入口
+- 用户主页、动态、评论、私信、收藏与稍后再看
+- 弹幕（含高级弹幕）、字幕、倍速、手势调节
+- 多账号、离线缓存、投屏、WebDAV 备份
+- 鸿蒙侧适配：沉浸光感顶栏、自由窗口自绘标题栏、安全区避让、HDR 输出
 
-### 资源与生命周期
+### BTR 下载增强（本项目移植）
 
-- 视频与音频共用同一个连接预算；音频每轮固定最多 2 片在飞，其余额度留给视频。
-- 队列按等待时长做 aging，长时间排队的请求优先，避免一条轨道饿死另一条。
-- 会话隔离：每次打开源生成新的 generation；切集、切清晰度、退出页面都会关闭旧会话并中断在飞请求，
-  旧会话的迟到回调和播放器事件被 generation / listenerEpoch 丢弃。
-- 代理启动失败、候选地址为空、或回环地址打开失败时**回退直连**，BTR 不会让视频放不出来。
+以下能力在 `lib/services/thread_ripper/` 中实现，并有对应单元测试：
 
-### 接入与设置
+| 能力 | 实现 | 说明 |
+| :--- | :--- | :--- |
+| **自适应并发控制** | `auto_concurrency.dart` | 八档阶梯 `4/8/12/16/24/32/48/64`，按缓冲、吞吐与限流反馈调档 |
+| **动态子块大小** | `idm_downloader.dart` `adaptiveChunkBytes()` | 目标约单连接 0.6 秒的字节量，按 64 KiB 取整，范围 64 KiB–1 MiB |
+| **多 CDN 下载调度** | `cdn_resolver.dart` | 大陆/海外节点池，按实测速度排序，失败节点指数退避 |
+| **EWMA 速度估算** | `_connectionBps` / `_pieceMs` | 连接速率与分块耗时按 0.7/0.3 平滑，供子块与 hedge 使用 |
+| **Hedge 请求** | `adaptiveHedgeDelayMs()` | 首请求迟迟不回时并发第二个节点，延迟随实测分块耗时自适应（下限 250 ms） |
+| **断点续传** | `RipperPartialException` + `keepProgress` | 中途卡顿只重取剩余字节，已收前缀直接复用（≥32 KiB 才保留） |
+| **失败分块恢复** | `maxRounds` 轮次重试 | 失败分片进入下一轮，节点按失败次数降权后重排 |
+| **下载任务协调** | `RipperSemaphore` + `trackKey` 单飞 | 视频与音频共用连接预算，同轨道同字节区间只下载一次 |
 
-- DASH 链路：`VideoDetailController` 把主地址与备用节点一起交给播放器，`PLPlayerController`
-  在 `open()` 前决定是否换成回环 URL；直播、本地文件、HLS/FLV、DRM 与试看集数**不**进入 BTR。
-- 设置项：总开关（默认关闭）、自动并发（默认开启）、手动档位、CDN 区域、自定义节点、
-  剧集加速、诊断对话框（实时档位、饱和占比、调档原因、冷却档位、真实吞吐）。
-- 旧配置迁移：布尔/字符串等历史写法会被归一化，非法自定义节点会被丢弃。
+几条边界规则（都在代码里，不是宣传语）：
 
-## 未实现与不适用
+- **默认关闭**。总开关不打开时，播放行为与基线完全一致。
+- `412 / 429` 立刻退档并冷却 180 秒；首字节超时退一档冷却 60 秒；传输卡顿与首字节超时分开上报。
+- 直播、本地文件、HLS/FLV、DRM 与试看集数**不会**进入 BTR。
+- 本地端点打开失败会自动回退直连，加速器不会让视频放不出来。
 
-明确说明，避免误解：
+### 本次版本（v0.2.0-beta.1）
 
-- 上游浏览器脚本的**全接管**能力（让 B 站内核以为缓冲已满、暂停它自己的下载）在原生播放器下
-  没有对应机制，本项目**没有**实现，也不需要实现。
-- 直播、HLS、FLV、本地文件不走 BTR。
-- DRM 与试看集数不走 BTR。
-- 没有做码率/画质的自动切换，BTR 只影响“怎么把已选清晰度的字节取回来”。
+- 同步 PiliPlus 鸿蒙上游 `a8431412`（`Release 2.1.6.2-ohos-2`，9 个提交）：自由窗口自绘标题栏、
+  PC 窗口接续、安全区去重、一镜到底返回动画、顶栏模糊、分身应用下载路径修复。
+- 移植 BTR 上游 `3e715f5f`（`2026.11.1.1`）的下载器改进：动态子块、EWMA 测速、
+  自适应 hedge 延迟、断点续传、信号量重复通知修复。
+- 依赖侧恢复 27 个 OHOS 插件源码并重新解析，HAP 可重复构建。
 
-## 构建
+## 截图
 
-环境（本项目实测通过的组合，未升级依赖）：
+<div align="center">
+  <img src="assets/screenshots/home.png" width="24%" alt="首页" />
+  <img src="assets/screenshots/bangumi_detail.png" width="24%" alt="番剧详情" />
+  <img src="assets/screenshots/dynamic.png" width="24%" alt="动态" />
+  <img src="assets/screenshots/set.png" width="24%" alt="设置" />
+  <p><sub>界面预览：继承自 PiliPlus 上游的客户端 UI（2024 年 iOS 端截图），<b>不是鸿蒙实机截图</b>。<br/>
+  鸿蒙版差异主要在窗口、状态栏与 HDR 处理，界面主体一致。</sub></p>
+</div>
 
-- Flutter OHOS SDK **3.44.9**（[oh-3.44.9-dev](https://gitcode.com/CPF-Flutter/flutter_flutter/tree/oh-3.44.9-dev)）
-- DevEco Studio **26.0**，HarmonyOS SDK API **26**
-- 目标设备：HarmonyOS 手机 / 平板
+## 安装
+
+当前 Release 提供的是**未签名** HAP，系统不允许直接安装。步骤：
+
+1. 下载 `PiliPlus-OHOS-BTR-v0.2.0-beta.1-unsigned.hap`，核对上面的 SHA-256。
+2. 用 DevEco Studio 打开 `ohos/` 工程，在 **Project Structure → Signing Configs** 配置你自己的证书
+   （需要华为开发者账号与对应设备的调试证书）。
+3. 签名后重新构建，或对已有工程重新打包：
+
+   ```bash
+   hvigorw assembleHap --mode module -p product=default
+   ```
+
+4. 通过 `hdc install` 或 DevEco Studio 安装到设备。
+
+覆盖安装沿用基线包名 `com.example.piliplus`，从 PiliPlus 鸿蒙版升级时数据保留；
+如果你之前装的是其他改包名的版本，需要先卸载。
+
+## 使用 BTR
+
+路径：**设置 → 视频 → 启用多线程视频加速 (BTR)**。
+
+| 开关 | 默认 | 作用 |
+| :--- | :--- | :--- |
+| 启用多线程视频加速 | 关 | 总开关。关闭时播放链路与基线一致 |
+| 自动并发 | 开 | 由调度器在 4–64 之间自动调档；关闭后使用下方固定档位 |
+| 手动并发档位 | 8 | 自动关闭时固定使用的连接数 |
+| CDN 区域 | 海外 | 节点池选择，支持自定义节点 |
+| 剧集加速 | 开 | 允许可播的 PGC 集数走 BTR（DRM/试看仍直连） |
+
+打开后可在同一页面查看**诊断信息**：当前档位、饱和占比、最近一次调档原因、冷却中的档位与实测吞吐。
+这些数字来自真实会话，没有会话时显示为空，不会编造。
+
+## 编译
+
+### 环境
+
+| 组件 | 版本 |
+| :--- | :--- |
+| Flutter OHOS SDK | **3.44.9**（Dart 3.12.2） |
+| DevEco Studio | **26.0** |
+| HarmonyOS SDK | API **26**（compileSdk 26.0.0.105） |
+| Node.js / ohpm / hvigor | DevEco Studio 自带 |
+
+Flutter 需使用鸿蒙分支：<https://gitcode.com/CPF-Flutter/flutter_flutter/tree/oh-3.44.9-dev>
+
+### 构建
 
 ```bash
 # 1. 依赖
@@ -110,330 +163,82 @@ flutter build hap --release --no-codesign \
   --dart-define-from-file=.vscode/env.json
 ```
 
-产物路径：`ohos/entry/build/default/outputs/default/entry-default-unsigned.hap`
+产物：`build/ohos/hap/entry-default-unsigned.hap`
 
-> [!IMPORTANT]
-> hvigor 会把 `--target_path` 按空格切分，**工程路径不能包含空格**。
-> 如果仓库放在含空格的目录下，请先 `git clone` 到无空格路径再构建。
+环境变量（PowerShell 示例）：
 
-签名：本仓库不提供签名配置。要安装到真机，请用 DevEco Studio 配置你自己的证书后重新签名。
+```powershell
+$env:DEVECO_SDK_HOME = 'C:\Program Files\Huawei\DevEco Studio\sdk'
+$env:HOS_SDK_HOME    = 'C:\Program Files\Huawei\DevEco Studio\sdk'
+$env:NODE_HOME       = 'C:\Program Files\Huawei\DevEco Studio\tools\node'
+$env:PATH = 'C:\Program Files\Huawei\DevEco Studio\tools\hvigor\bin;' +
+            'C:\Program Files\Huawei\DevEco Studio\tools\ohpm\bin;' +
+            'C:\Program Files\Huawei\DevEco Studio\tools\node;' + $env:PATH
+```
+
+### 三个必须知道的坑
+
+1. **工程路径不能含空格。** hvigor 会把 `--target_path` 按空格切开，路径含空格时
+   `ohpm install` 直接报 `Invalid "--target_path" value`。请把仓库放到无空格路径，
+   或复制一份到无空格目录再构建。目录联接（junction）无效，hvigor 会解析到真实路径。
+2. **`gitcode.com` 的 git 依赖在国内网络下经常中断**（`RPC failed; curl 18`）。
+   `flutter pub get` 失败时，可先把依赖仓库手动克隆到本地，再用 `pubspec_overrides.yaml`
+   （已在 `.gitignore` 中，不会提交）指向本地路径。
+3. **Git Bash 里跑 `ohpm` 会触发 .bat 递归**（`BATCH RECURSION exceeds STACK limits`）。
+   构建请用 PowerShell 或 cmd。
+
+更多构建与依赖细节见 [docs/BUILD.md](docs/BUILD.md) 与
+[docs/OHOS_DEPENDENCY_RECOVERY_REPORT.md](docs/OHOS_DEPENDENCY_RECOVERY_REPORT.md)。
+
+### 测试
+
+```bash
+flutter test test/thread_ripper   # BTR 专项
+flutter test                      # 全量
+dart analyze lib test
+```
+
+## 来源与版本
+
+| 来源 | 用途 | 当前基线 | 许可证 |
+| :--- | :--- | :--- | :--- |
+| [dev4harmony/PiliPlus](https://github.com/dev4harmony/PiliPlus) | 鸿蒙基线，应用主体 | `a8431412`（`ohos`，`2.1.6.2-ohos-2`） | GPL-3.0 |
+| [lemonteaau/PiliPlus](https://github.com/lemonteaau/PiliPlus) | 接入形态参考（未整包合并） | `f368e92a` | GPL-3.0 |
+| [MrTangLuyao/Bilibili-thread-ripper](https://github.com/MrTangLuyao/Bilibili-thread-ripper) | 下载与调度算法 | `3e715f5f`（`2026.11.1.1`） | MIT |
+
+BTR 的 JS → Dart 对应关系、与上游的刻意差异、全部阈值参数，记录在 [docs/BTR.md](docs/BTR.md)。
+上游同步过程见 [docs/UPSTREAM_SYNC_REPORT_2026-11-01.md](docs/UPSTREAM_SYNC_REPORT_2026-11-01.md)。
 
 ## 已知限制
 
-- **未签名**：Release 中的 HAP 为 `unsigned`，**未通过安装验证**，需要自行签名。
-- **未真机验证**：本版本在 Windows 构建机上完成编译与单元测试，没有在鸿蒙设备上跑过播放回归。
-- 只在 DASH（`data.dash != null`）链路启用；其它源形态保持原样。
-- 代理监听 `127.0.0.1` 的随机端口；端口无法绑定时回退直连，此时没有加速。
-- 自适应调度的参数（试探 10 s、冷却 90/180 s、饱和占比 60%）来自上游经验值，
-  没有在鸿蒙设备上按机型重新标定。
-- 上游 `2026.10.19.2` 之后的新提交尚未跟进。
-
-## 下载
-
-见本仓库的 [Releases](../../releases)。当前只有 `v0.1.0-beta.1`，附未签名 HAP、
-`SHA256SUMS.txt` 与构建说明。
+- **未签名**：Release 中的 HAP 不能直接安装，必须自行签名。
+- **未做真机验证**：本轮只验证到「依赖可解析、代码可分析、测试通过、HAP 可构建」，
+  没有在鸿蒙设备上安装或播放，因此不提供任何性能提升数据。
+- 自适应参数（试探 10 秒、冷却 60/90/180 秒、饱和占比 60%）来自上游经验值，
+  没有按鸿蒙机型重新标定。
+- 只在 `data.dash != null` 的 DASH 链路启用，其他源形态保持原样。
+- BTR 上游与 PiliPlus 上游的后续提交尚未跟进。
 
 ## 许可证
 
-本项目以 **GPL-3.0** 发布，继承自 PiliPlus 鸿蒙分支。BTR 部分为 MIT，MIT 允许并入 GPL-3.0
-作品但要求保留版权与许可声明，全文见 [docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md)
-与 [third_party/bilibili-thread-ripper/LICENSE](third_party/bilibili-thread-ripper/LICENSE)。
-
-## 声明
-
-此项目仅用于学习和测试，请于下载后 24 小时内删除。所用 API 皆从官方网站收集，不提供任何破解内容。
-请支持正版，尊重创作者。
+以 **GPL-3.0** 发布，继承自 PiliPlus 鸿蒙分支。BTR 部分为 MIT，可并入 GPL-3.0 作品但须保留声明。
+全文见 [LICENSE](LICENSE)、[docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md)、
+[third_party/bilibili-thread-ripper/LICENSE](third_party/bilibili-thread-ripper/LICENSE)。
 
 ## 致谢
 
-- [PiliPlus](https://github.com/bggRGjQaUbCoE/PiliPlus) 及其上游 `orz12/PiliPalaX`、`guozhigq/pilipala`
+- [PiliPlus](https://github.com/bggRGjQaUbCoE/PiliPlus) 及上游 `orz12/PiliPalaX`、`guozhigq/pilipala`
 - [dev4harmony/PiliPlus](https://github.com/dev4harmony/PiliPlus) 鸿蒙适配团队
-- [lemonteaau/PiliPlus](https://github.com/lemonteaau/PiliPlus) 的 BTR 接入实践
 - [MrTangLuyao/Bilibili-thread-ripper](https://github.com/MrTangLuyao/Bilibili-thread-ripper) 的下载与调度算法
+- [lemonteaau/PiliPlus](https://github.com/lemonteaau/PiliPlus) 的 BTR 接入实践
 - media_kit 鸿蒙适配者 [ErBW_s](https://github.com/ErBWs) 及所有贡献者
+
+## 免责声明
+
+本项目仅用于学习和技术研究，请于下载后 24 小时内删除。
+所有 API 均来自官方网站，不提供任何破解内容。请支持正版，尊重创作者。
 
 ---
 
-# 以下是继承的基线 README
-
-> 以下内容来自 `dev4harmony/PiliPlus` 的 `ohos` 分支与原上游 PiliPlus，
-> 用于说明本项目的应用主体能力与历史来源，原样保留。
-
-## PiliPlus鸿蒙版分支
-
-此分支目前主要由[dev4harmony/flutter-dev](https://github.com/orgs/dev4harmony/teams/flutter-dev)维护
-
-> [!WARNING]
-> 此分支只是将PiliPlus适配到鸿蒙
->
-> 几乎所有与鸿蒙平台无关的功能都是上游实现的
-
-### 提issue注意事项：
-
-- [issues看板](https://github.com/users/qinshah/projects/1)
-
-- 请查看是否已存在类似issue并确保属于鸿蒙版特有问题
-
-- 分支需要同步上游，一般不增加新功能或改变特性
-
-### 编译运行
-
-> [!TIP]
-> 当前项目编译API已经提升到了26.0.0，请在华为官网下载最新的配套IDE和SDK使用，防止编译异常
-
-- 1、配置鸿蒙flutter3.44.9环境，参考[鸿蒙flutter3.44.9](https://gitcode.com/CPF-Flutter/flutter_flutter/tree/oh-3.44.9-dev)
-
-- 2、通过vscode运行启动配置或是build_hap任务以确保应用内所需环境变量正确写入
-
-若遇到类似 **Package not available (the pubspec for image_picker 1.1.2 from git has version 1.0.2).** 这样的报错，可参考[这篇掘金](https://juejin.cn/post/7602936997175132212)
-
-### 欢迎参与开发适配，让鸿蒙PiliPlus更完善
-
-### 感谢
-
-- PiliPlus[上游](https://github.com/bggRGjQaUbCoE/PiliPlus)
-
-- [dev4harmony/flutter-dev](https://github.com/orgs/dev4harmony/teams/flutter-dev)成员
-
-- media_kit适配者[ErBW_s](https://github.com/ErBWs)
-
-- 所有开发者和贡献者
-
-- ......
-
-# 以下是原上游项目README
-
-<div align="center">
-    <img width="200" height="200" src="assets/images/logo/logo.png">
-</div>
-
-<div align="center">
-    <h1>PiliPlus</h1>
-<div align="center">
-
-中文 | [English](README.en.md)
-
-![GitHub repo size](https://img.shields.io/github/repo-size/bggRGjQaUbCoE/PiliPlus) 
-![GitHub Repo stars](https://img.shields.io/github/stars/bggRGjQaUbCoE/PiliPlus) 
-![GitHub all releases](https://img.shields.io/github/downloads/bggRGjQaUbCoE/PiliPlus/total) 
-</div>
-    <p>使用Flutter开发的BiliBili第三方客户端</p>
-    
-<img src="assets/screenshots/510shots_so.png" width="32%" alt="home" />
-<img src="assets/screenshots/174shots_so.png" width="32%" alt="home" />
-<img src="assets/screenshots/850shots_so.png" width="32%" alt="home" />
-<br/>
-<img src="assets/screenshots/main_screen.png" width="96%" alt="home" />
-<br/>
-</div>
-
-<br/>
-
-## 适配平台
-
-- [x] Android
-- [x] iOS
-- [x] Pad
-- [x] Windows
-- [x] Linux
-
-[![Packaging status](https://repology.org/badge/vertical-allrepos/piliplus.svg)](https://repology.org/project/piliplus/versions)
-
-## refactor
-
-- [ ] gRPC [wip]
-- [x] 用户界面
-- [x] 其他
-
-## feat
-
-- [x] 编辑动态
-- [x] DLNA 投屏
-- [x] 离线缓存/播放
-- [x] 移动端支持点击弹幕悬停，点赞、复制、举报 by [@My-Responsitories](https://github.com/My-Responsitories)
-- [x] 播放音频
-- [x] 跳过番剧片头/片尾
-- [x] 安卓端 `loudnorm` 适配 by [@My-Responsitories](https://github.com/My-Responsitories)
-- [x] Win/Mac 支持极验、短信登录 by [@My-Responsitories](https://github.com/My-Responsitories)
-- [x] 视频截取动图 by [@My-Responsitories](https://github.com/My-Responsitories)
-- [x] AI 原声翻译
-- [x] SuperChat
-- [x] 播放课堂视频
-- [x] 发起投票
-- [x] 发布动态/评论支持`富文本编辑`/`表情显示`/`@用户`
-- [x] 修改消息设置
-- [x] 修改聊天设置
-- [x] 展示折叠消息
-- [x] 查看用户图文
-- [x] 动态话题
-- [x] 直播分区
-- [x] 分享`视频`/`番剧`/`动态`/`专栏`/`直播`至消息
-- [x] 创建/修改/删除关注分组
-- [x] 移除粉丝
-- [x] 直播弹幕发送表情
-- [x] 收藏夹排序
-- [x] 稍后再看 ~~`未看`~~ / `未看完` / ~~`已看完`~~ 分类
-- [x] WebDAV 备份/恢复设置
-- [x] 保存评论/动态
-- [x] 高级弹幕 by [@My-Responsitories](https://github.com/My-Responsitories)
-- [x] 取消/置顶评论
-- [x] 记笔记
-- [x] 多账号支持 by [@My-Responsitories](https://github.com/My-Responsitories)
-- [x] 屏蔽带货动态/评论
-- [x] 互动视频
-- [x] 发评/动态反诈
-- [x] 高能进度条
-- [x] 滑动跳转预览视频缩略图
-- [x] Live Photo
-- [x] 复制/移动/排序收藏夹/稍后再看视频
-- [x] 超分辨率
-- [x] 合并弹幕
-- [x] 会员彩色弹幕
-- [x] 播放全部/继续播放/倒序播放
-- [x] Cookie 登录
-- [x] 显示视频分段信息
-- [x] 调节字幕大小
-- [x] 调节全屏弹幕大小
-- [x] 收藏夹/稍后再看多选删除
-- [x] 搜索用户动态
-- [x] 直播弹幕
-- [x] 修改头像/用户名/签名/性别/生日
-- [x] 创建/编辑/删除收藏夹
-- [x] 评论楼中楼查看对话
-- [x] 评论楼中楼定位点击查看的评论
-- [x] 评论楼中楼按热度/时间排序
-- [x] 评论点踩
-- [x] 私信发图
-- [x] 投币动画
-- [x] 取消/追番，更新追番状态
-- [x] 取消/订阅合集
-- [x] SponsorBlock
-- [x] 显示视频完整合集
-- [x] 三连动画
-- [x] 番剧三连
-- [x] 带图评论
-- [x] 视频 TAG
-- [x] 筛选搜索
-- [x] 转发动态
-- [x] 合集图片
-- [x] 删除/置顶/撤回私信
-- [x] 举报用户/评论/视频/动态
-- [x] 删除/发布/置顶文本/图片动态
-- [x] 其他
-
-## opt
-
-- [x] 专栏界面
-- [x] 私信界面
-- [x] 收藏面板
-- [x] PIP
-- [x] 视频封面
-- [x] 回复界面
-- [x] 系统通知
-- [x] 评论显示
-- [x] 亮度调节
-- [x] 视频播放
-- [x] 视频 staff
-- [x] 防止 bottomsheet 遮挡全屏视频
-- [x] 其他
-
-## fix
-
-- [x] 番剧分集点赞/投币/收藏
-- [x] bugs
-
-<br/>
-
-## 功能
-
-- [x] 推荐视频列表(app 端)
-- [x] 最热视频列表
-- [x] 热门直播
-- [x] 番剧列表
-- [x] 屏蔽黑名单内用户视频
-- [x] 无痕模式（播放视为未登录）
-- [x] 游客模式（推荐视为未登录）
-
-- [x] 用户相关
-  - [x] 粉丝、关注用户、拉黑用户查看
-  - [x] 用户主页查看
-  - [x] 关注/取关用户
-  - [x] 离线缓存
-  - [x] 稍后再看
-  - [x] 观看记录
-  - [x] 我的收藏
-  - [x] 站内私信
-- [x] 动态相关
-  - [x] 全部、投稿、番剧分类查看
-  - [x] 动态评论查看
-  - [x] 动态评论回复功能
-
-- [x] 视频播放相关
-  - [x] 双击快进/快退
-  - [x] 双击播放/暂停
-  - [x] 垂直方向调节亮度/音量
-  - [x] 垂直方向上滑全屏、下滑退出全屏
-  - [x] 水平方向手势快进/快退
-  - [x] 全屏方向设置
-  - [x] 倍速选择/长按 2 倍速
-  - [x] 硬件加速（视机型而定）
-  - [x] 画质选择（高清画质未解锁）
-  - [x] 音质选择（视视频而定）
-  - [x] 解码格式选择（视视频而定）
-  - [x] 弹幕
-  - [x] 字幕
-  - [x] 记忆播放
-  - [x] 视频比例：高度/宽度适应、填充、包含等
-- [x] 搜索相关
-  - [x] 热搜
-  - [x] 搜索历史
-  - [x] 默认搜索词
-  - [x] 投稿、番剧、直播间、用户搜索
-  - [x] 视频搜索排序、按时长筛选
-- [x] 视频详情页相关
-  - [x] 视频选集(分 p)切换
-  - [x] 点赞、投币、收藏/取消收藏
-  - [x] 相关视频查看
-  - [x] 评论用户身份标识
-  - [x] 评论(排序)查看、二楼评论查看
-  - [x] 主楼、二楼评论回复功能
-  - [x] 评论点赞
-  - [x] 评论笔记图片查看、保存
-
-- [x] 设置相关
-  - [x] 画质、音质、解码方式预设
-  - [x] 图片质量设定
-  - [x] 主题模式：亮色/暗色/跟随系统
-  - [x] 震动反馈(可选)
-  - [x] 高帧率
-  - [x] 自动全屏
-  - [x] 横屏适配
-- [ ] 等等
-
-<br/>
-
-## 下载
-
-可以通过右侧 release 进行下载或拉取代码到本地进行编译
-
-<br/>
-
-## 声明
-
-此项目（PiliPlus）是个人为了兴趣而开发，仅用于学习和测试，请于下载后24小时内删除。
-所用API皆从官方网站收集，不提供任何破解内容。
-在此致敬原作者：[guozhigq/pilipala](https://github.com/guozhigq/pilipala)
-在此致敬上游作者：[orz12/PiliPalaX](https://github.com/orz12/PiliPalaX)
-本仓库做了更激进的修改，感谢原作者的开源精神。
-
-感谢使用
-
-<br/>
-
-## 致谢
-
-- [bilibili-API-collect](https://github.com/SocialSisterYi/bilibili-API-collect)
-- [flutter_meedu_videoplayer](https://github.com/zezo357/flutter_meedu_videoplayer)
-- [media-kit](https://github.com/media-kit/media-kit)
-- [dio](https://pub.dev/packages/dio)
-- 等等
+<sub>应用主体来自 GPL-3.0 的 PiliPlus 鸿蒙分支；原样保留的上游 README 见
+[docs/README.upstream.md](docs/README.upstream.md)。</sub>
