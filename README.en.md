@@ -25,12 +25,12 @@
 
 | Version | Date | Artifact | Size | Signed |
 | :--- | :--- | :--- | :--- | :--- |
-| **v0.2.0-beta.1** | 2026-11-04 | HAP (arm64-v8a) | 30.0 MB | No |
+| **v0.2.0-beta.1** | 2026-11-04 | HAP (arm64-v8a) | 31,427,949 bytes (30.0 MB) | No |
 
-**[⬇ Download PiliPlus-OHOS-BTR-v0.2.0-beta.1-unsigned.hap](https://github.com/Oearawa/PiliPlus-OHOS-BTR/releases/latest)**
+**[⬇ Download PiliPlus-OHOS-BTR-v0.2.0-beta.1-unsigned.hap](https://github.com/Oearawa/PiliPlus-OHOS-BTR/releases/download/v0.2.0-beta.1/PiliPlus-OHOS-BTR-v0.2.0-beta.1-unsigned.hap)**
 
 ```text
-SHA-256  (filled in after the build)
+SHA-256  6d0076258db5e8f01b909da547beffab1e378b41ea9f757ad5c1234a31ee9c57
 ```
 
 > The HAP is **unsigned** and cannot be installed as-is. Sign it with your own

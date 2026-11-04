@@ -23,12 +23,12 @@
 
 | 最新版本 | 发布日期 | 产物 | 大小 | 签名 |
 | :--- | :--- | :--- | :--- | :--- |
-| **v0.2.0-beta.1** | 2026-11-04 | HAP（arm64-v8a） | 30.0 MB | 未签名 |
+| **v0.2.0-beta.1** | 2026-11-04 | HAP（arm64-v8a） | 31,427,949 字节（30.0 MB） | 未签名 |
 
-**[⬇ 下载 PiliPlus-OHOS-BTR-v0.2.0-beta.1-unsigned.hap](https://github.com/Oearawa/PiliPlus-OHOS-BTR/releases/latest)**
+**[⬇ 下载 PiliPlus-OHOS-BTR-v0.2.0-beta.1-unsigned.hap](https://github.com/Oearawa/PiliPlus-OHOS-BTR/releases/download/v0.2.0-beta.1/PiliPlus-OHOS-BTR-v0.2.0-beta.1-unsigned.hap)**
 
 ```text
-SHA-256  (构建完成后填入)
+SHA-256  6d0076258db5e8f01b909da547beffab1e378b41ea9f757ad5c1234a31ee9c57
 ```
 
 > HAP 未签名，不能直接安装。先用 DevEco Studio 配置自己的证书签名，详见 [安装](#安装)。
