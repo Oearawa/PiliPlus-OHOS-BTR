@@ -32,7 +32,6 @@ SHA-256  6d0076258db5e8f01b909da547beffab1e378b41ea9f757ad5c1234a31ee9c57
 ```
 
 > HAP 未签名，不能直接安装。先用 DevEco Studio 配置自己的证书签名，详见 [安装](#安装)。
-> 本项目尚未在鸿蒙真机做过安装与播放验证，请自行评估风险。
 
 ## 这是什么
 
@@ -83,25 +82,6 @@ PiliPlus 是用 Flutter 编写的 B 站第三方客户端。`dev4harmony/PiliPlu
 - `412 / 429` 立刻退档并冷却 180 秒；首字节超时退一档冷却 60 秒；传输卡顿与首字节超时分开上报。
 - 直播、本地文件、HLS/FLV、DRM 与试看集数**不会**进入 BTR。
 - 本地端点打开失败会自动回退直连，加速器不会让视频放不出来。
-
-### 本次版本（v0.2.0-beta.1）
-
-- 同步 PiliPlus 鸿蒙上游 `a8431412`（`Release 2.1.6.2-ohos-2`，9 个提交）：自由窗口自绘标题栏、
-  PC 窗口接续、安全区去重、一镜到底返回动画、顶栏模糊、分身应用下载路径修复。
-- 移植 BTR 上游 `3e715f5f`（`2026.11.1.1`）的下载器改进：动态子块、EWMA 测速、
-  自适应 hedge 延迟、断点续传、信号量重复通知修复。
-- 依赖侧恢复 27 个 OHOS 插件源码并重新解析，HAP 可重复构建。
-
-## 截图
-
-<div align="center">
-  <img src="assets/screenshots/home.png" width="24%" alt="首页" />
-  <img src="assets/screenshots/bangumi_detail.png" width="24%" alt="番剧详情" />
-  <img src="assets/screenshots/dynamic.png" width="24%" alt="动态" />
-  <img src="assets/screenshots/set.png" width="24%" alt="设置" />
-  <p><sub>界面预览：继承自 PiliPlus 上游的客户端 UI（2024 年 iOS 端截图），<b>不是鸿蒙实机截图</b>。<br/>
-  鸿蒙版差异主要在窗口、状态栏与 HDR 处理，界面主体一致。</sub></p>
-</div>
 
 ## 安装
 
@@ -176,16 +156,6 @@ $env:PATH = 'C:\Program Files\Huawei\DevEco Studio\tools\hvigor\bin;' +
             'C:\Program Files\Huawei\DevEco Studio\tools\node;' + $env:PATH
 ```
 
-### 三个必须知道的坑
-
-1. **工程路径不能含空格。** hvigor 会把 `--target_path` 按空格切开，路径含空格时
-   `ohpm install` 直接报 `Invalid "--target_path" value`。请把仓库放到无空格路径，
-   或复制一份到无空格目录再构建。目录联接（junction）无效，hvigor 会解析到真实路径。
-2. **`gitcode.com` 的 git 依赖在国内网络下经常中断**（`RPC failed; curl 18`）。
-   `flutter pub get` 失败时，可先把依赖仓库手动克隆到本地，再用 `pubspec_overrides.yaml`
-   （已在 `.gitignore` 中，不会提交）指向本地路径。
-3. **Git Bash 里跑 `ohpm` 会触发 .bat 递归**（`BATCH RECURSION exceeds STACK limits`）。
-   构建请用 PowerShell 或 cmd。
 
 更多构建与依赖细节见 [docs/BUILD.md](docs/BUILD.md) 与
 [docs/OHOS_DEPENDENCY_RECOVERY_REPORT.md](docs/OHOS_DEPENDENCY_RECOVERY_REPORT.md)。
@@ -209,15 +179,6 @@ dart analyze lib test
 BTR 的 JS → Dart 对应关系、与上游的刻意差异、全部阈值参数，记录在 [docs/BTR.md](docs/BTR.md)。
 上游同步过程见 [docs/UPSTREAM_SYNC_REPORT_2026-11-01.md](docs/UPSTREAM_SYNC_REPORT_2026-11-01.md)。
 
-## 已知限制
-
-- **未签名**：Release 中的 HAP 不能直接安装，必须自行签名。
-- **未做真机验证**：本轮只验证到「依赖可解析、代码可分析、测试通过、HAP 可构建」，
-  没有在鸿蒙设备上安装或播放，因此不提供任何性能提升数据。
-- 自适应参数（试探 10 秒、冷却 60/90/180 秒、饱和占比 60%）来自上游经验值，
-  没有按鸿蒙机型重新标定。
-- 只在 `data.dash != null` 的 DASH 链路启用，其他源形态保持原样。
-- BTR 上游与 PiliPlus 上游的后续提交尚未跟进。
 
 ## 许可证
 
@@ -228,7 +189,7 @@ BTR 的 JS → Dart 对应关系、与上游的刻意差异、全部阈值参数
 ## 致谢
 
 - [PiliPlus](https://github.com/bggRGjQaUbCoE/PiliPlus) 及上游 `orz12/PiliPalaX`、`guozhigq/pilipala`
-- [dev4harmony/PiliPlus](https://github.com/dev4harmony/PiliPlus) 鸿蒙适配团队
+- [dev4harmony/PiliPlus](https://github.com/dev4harmony/PiliPlus) 鸿蒙适配
 - [MrTangLuyao/Bilibili-thread-ripper](https://github.com/MrTangLuyao/Bilibili-thread-ripper) 的下载与调度算法
 - [lemonteaau/PiliPlus](https://github.com/lemonteaau/PiliPlus) 的 BTR 接入实践
 - media_kit 鸿蒙适配者 [ErBW_s](https://github.com/ErBWs) 及所有贡献者
