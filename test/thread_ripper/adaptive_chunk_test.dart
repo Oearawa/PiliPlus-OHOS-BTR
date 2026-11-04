@@ -7,7 +7,6 @@
 
 import 'dart:typed_data';
 
-import 'package:PiliPlus/services/thread_ripper/cdn_resolver.dart';
 import 'package:PiliPlus/services/thread_ripper/idm_downloader.dart';
 import 'package:PiliPlus/services/thread_ripper/range_core.dart';
 import 'package:flutter_test/flutter_test.dart';
