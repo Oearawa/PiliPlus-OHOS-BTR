@@ -1,0 +1,72 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "模块描述"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "description"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "PiliPro"
+    },
+    {
+      "name": "write_imagevideo_reason",
+      "value": "用于保存图片/视频到相册。"
+    },
+    {
+      "name": "no_matter",
+      "value": "这种权限给就完了你别管"
+    },
+    {
+      "name": "shortcut_search",
+      "value": "搜索"
+    },
+    {
+      "name": "shortcut_offline",
+      "value": "离线缓存"
+    },
+    {
+      "name": "shortcut_history",
+      "value": "历史记录"
+    },
+    {
+      "name": "shortcut_favorite",
+      "value": "收藏夹"
+    },
+    {
+      "name": "EntryFormAbility_label",
+      "value": "UP主卡片"
+    },
+    {
+      "name": "EntryFormAbility_desc",
+      "value": "UP主卡片"
+    },
+    {
+      "name": "up_card_name",
+      "value": "UP主卡片"
+    },
+    {
+      "name": "up_card_desc",
+      "value": "展示UP主信息与最近更新，点击直达主页"
+    },
+    {
+      "name": "up_card_mini_name",
+      "value": "简约UP主卡片"
+    },
+    {
+      "name": "up_card_mini_desc",
+      "value": "极简展示UP主头像与名称，点击直达主页"
+    },
+    {
+      "name": "up_card_24_name",
+      "value": "UP主大卡片"
+    },
+    {
+      "name": "up_card_24_desc",
+      "value": "展示最近三个投稿及封面"
+    }
+  ]
+}

@@ -1,0 +1,2950 @@
+import 'dart:async' show StreamSubscription, Timer, TimeoutException, unawaited;
+import 'dart:convert' show ascii;
+import 'dart:io' show Platform;
+import 'dart:math' show max, min;
+import 'dart:ui' as ui;
+
+import 'package:PiliPlus/common/assets.dart';
+import 'package:PiliPlus/harmony_adapt/harmony_channel.dart';
+import 'package:PiliPlus/harmony_adapt/orientation/orientation_policy.dart';
+import 'package:PiliPlus/harmony_adapt/window/window_facts.dart';
+import 'package:PiliPlus/http/browser_ua.dart';
+import 'package:PiliPlus/http/constants.dart';
+import 'package:PiliPlus/http/loading_state.dart';
+import 'package:PiliPlus/http/video.dart';
+import 'package:PiliPlus/models/common/account_type.dart';
+import 'package:PiliPlus/models/common/audio_normalization.dart';
+import 'package:PiliPlus/models/common/super_resolution_type.dart';
+import 'package:PiliPlus/models/common/video/base_quality.dart';
+import 'package:PiliPlus/models/common/video/video_type.dart';
+import 'package:PiliPlus/models/user/danmaku_rule.dart';
+import 'package:PiliPlus/models/video/play/url.dart';
+import 'package:PiliPlus/models_new/video/video_shot/data.dart';
+import 'package:PiliPlus/pages/danmaku/danmaku_model.dart';
+import 'package:PiliPlus/pages/setting/models/play_settings.dart'
+    show kMaxVolume;
+import 'package:PiliPlus/pages/sponsor_block/block_mixin.dart';
+import 'package:PiliPlus/plugin/pl_player/models/data_source.dart';
+import 'package:PiliPlus/plugin/pl_player/models/data_status.dart';
+import 'package:PiliPlus/plugin/pl_player/models/double_tap_type.dart';
+import 'package:PiliPlus/plugin/pl_player/models/duration.dart';
+import 'package:PiliPlus/plugin/pl_player/models/fullscreen_mode.dart';
+import 'package:PiliPlus/plugin/pl_player/models/heart_beat_type.dart';
+import 'package:PiliPlus/plugin/pl_player/models/ohos_hdr_output.dart';
+import 'package:PiliPlus/plugin/pl_player/models/play_repeat.dart';
+import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
+import 'package:PiliPlus/plugin/pl_player/models/video_fit_type.dart';
+import 'package:PiliPlus/plugin/pl_player/utils/danmaku_options.dart';
+import 'package:PiliPlus/plugin/pl_player/utils/fullscreen.dart';
+import 'package:PiliPlus/plugin/pl_player/utils/player_rebuild_queue.dart';
+import 'package:PiliPlus/plugin/pl_player/utils/ripper_feedback.dart';
+import 'package:PiliPlus/services/service_locator.dart';
+import 'package:PiliPlus/services/thread_ripper/player_bridge.dart';
+import 'package:PiliPlus/services/thread_ripper/prefs.dart';
+import 'package:PiliPlus/utils/accounts.dart';
+import 'package:PiliPlus/utils/android/bindings.g.dart';
+import 'package:PiliPlus/utils/asset_utils.dart';
+import 'package:PiliPlus/utils/device_utils.dart';
+import 'package:PiliPlus/utils/duration_utils.dart';
+import 'package:PiliPlus/utils/extension/box_ext.dart';
+import 'package:PiliPlus/utils/extension/num_ext.dart';
+import 'package:PiliPlus/utils/extension/size_ext.dart';
+import 'package:PiliPlus/utils/extension/string_ext.dart';
+import 'package:PiliPlus/utils/feed_back.dart';
+import 'package:PiliPlus/utils/image_utils.dart';
+import 'package:PiliPlus/utils/ios/pip_helper.dart';
+import 'package:PiliPlus/utils/page_utils.dart';
+import 'package:PiliPlus/utils/path_utils.dart';
+import 'package:PiliPlus/utils/platform_utils.dart';
+import 'package:PiliPlus/utils/storage.dart';
+import 'package:PiliPlus/utils/storage_key.dart';
+import 'package:PiliPlus/utils/storage_pref.dart';
+import 'package:PiliPlus/utils/utils.dart';
+import 'package:archive/archive.dart' show getCrc32;
+import 'package:canvas_danmaku/canvas_danmaku.dart';
+import 'package:easy_debounce/easy_throttle.dart';
+import 'package:floating/floating.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
+import 'package:flutter/services.dart'
+    show DeviceOrientation, HapticFeedback, KeyDownEvent;
+import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
+import 'package:flutter_volume_controller/flutter_volume_controller.dart';
+import 'package:get/get.dart';
+import 'package:hive_ce/hive.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
+import 'package:native_device_orientation/native_device_orientation.dart';
+import 'package:os_type/os_type.dart';
+import 'package:path/path.dart' as path;
+import 'package:screen_brightness_platform_interface/screen_brightness_platform_interface.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:window_manager/window_manager.dart';
+
+typedef PlayCallback = Future<void>? Function();
+typedef PlayOwner = ({String tag, Type? type});
+
+class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
+  Player? _videoPlayerController;
+
+  /// 播放器控制器。用 Rx 承载而不是普通字段：它的创建/释放都发生在异步链路
+  /// 里（换源、初始化失败、退后台清内存），与页面「可以开始播放」的时机并不同
+  /// 步。页面侧靠 `videoController == null` 决定是否挂载 PLVideoPlayer，普通字
+  /// 段的变化读不到，守卫就会在控制器为空时把播放器视图挂上去，命中
+  /// `_PLVideoPlayerState.initState` 里的空断言而整页报错。
+  final Rxn<VideoController> _videoControllerNotifier = Rxn<VideoController>();
+
+  /// setDataSource 与渲染路径重建共用的串行队列，见 [PlayerRebuildQueue]。
+  late final PlayerRebuildQueue _playerQueue = PlayerRebuildQueue(
+    hasPlayer: () => _videoPlayerController != null,
+    isStale: () => _appliedOutput != _ohosOutput,
+    rebuild: _rebuildForRenderPath,
+    onError: _onRenderPathRebuildFailed,
+  );
+
+  /// 渲染路径重建**完成**后自增（新播放器已经 open 好）。
+  ///
+  /// 与 [videoController] 的变化不同：后者在 VideoController 刚被替换时就变了，
+  /// 供 UI 尽快改挂新 controller，那时 `player.open()` 还没调用；这时候去设字幕
+  /// 轨之类的东西会被随后的 loadfile 丢掉。页面级、需要播放器真正就绪的重挂
+  /// 逻辑要订阅这一个。
+  ///
+  /// 只在 [_rebuildForRenderPath] 里自增——正常的 setDataSource 流程有 onInit 收口，
+  /// 不需要也不应该重复触发。
+  final RxInt playerRebuilt = 0.obs;
+
+  static PlPlayerController? _instance;
+
+  PlayerStatus playerStatus = .paused;
+
+  final Rx<DataStatus> dataStatus = Rx(.none);
+
+  Duration? seekToPos;
+  bool hasToasted = false;
+  final RxBool isSeeking = false.obs;
+
+  final RxInt position = RxInt(0);
+  final RxInt seekPosition = RxInt(0);
+  int get progress =>
+      isSeeking.value && hoverDx == null ? seekPosition.value : position.value;
+
+  int get positionInMilliseconds =>
+      videoPlayerController?.state.position.inMilliseconds ?? 0;
+
+  final RxInt buffered = RxInt(0);
+
+  final RxInt duration = RxInt(0);
+
+  int durationInMilliseconds = 0;
+
+  void updateDuration(Duration value) {
+    duration.value = value.inSeconds;
+    durationInMilliseconds = value.inMilliseconds;
+  }
+
+  int _playerCount = 0;
+
+  late double lastPlaybackSpeed = 1.0;
+  final RxDouble _playbackSpeed = Pref.playSpeedDefault.obs;
+  late final RxDouble _longPressSpeed = Pref.longPressSpeedDefault.obs;
+
+  final RxDouble volume = RxDouble(
+    PlatformUtils.isDesktop ? Pref.desktopVolume : 1.0,
+  );
+
+  /// 实际音量
+  final actualVolume = 0.0.obs;
+  final setSystemBrightness = Pref.setSystemBrightness;
+
+  final RxDouble brightness = (-1.0).obs;
+
+  final RxBool showControls = false.obs;
+
+  final RxBool showBrightnessStatus = false.obs;
+
+  final RxBool longPressStatus = false.obs;
+
+  final RxBool controlsLock = false.obs;
+
+  final RxBool isFullScreen = false.obs;
+  bool isLive = false;
+
+  bool _isVertical = false;
+
+  final Rx<VideoFitType> videoFit = Rx(.contain);
+
+  late final RxBool continuePlayInBackground =
+      Pref.continuePlayInBackground.obs;
+
+  bool _autoPlay = false;
+
+  // 记录历史记录
+  int? _aid;
+  String? _bvid;
+  int? cid;
+
+  /// 当前数据源由哪个页面控制器建立。播放器是单例，而视频页 / 直播页可以叠加
+  /// （从视频页再点开一个视频），链路变化这类被动事件必须据此判断自己是否仍是
+  /// 播放器的持有者，否则后台的页面会把播放器抢回自己的源。
+  Object? sourceOwner;
+  int? _epid;
+  int? _seasonId;
+  int? _pgcType;
+  VideoType _videoType = VideoType.ugc;
+  int _heartDuration = 0;
+  int? width;
+  int? height;
+
+  late final tryLook = !Accounts.get(AccountType.video).isLogin && Pref.p1080;
+
+  late DataSource dataSource;
+
+  Timer? _timer;
+  StreamSubscription? _subForSeek;
+
+  // 鸿蒙：mpv 的 ohaudio 音频输出感知不到系统音频打断（如其他 app 抢占焦点），
+  // 被打断后 mpv 仍自认为在播放，进度停滞、UI 按钮状态错误且无法点击恢复。
+  // 用位置停滞检测兜底：播放中且非缓冲时位置连续数秒不前进，视为被系统打断。
+  Timer? _stallWatchdog;
+  int? _stallLastPosition;
+  int _stallTicks = 0;
+  bool _audioInterrupted = false;
+
+  Box setting = GStorage.setting;
+
+  // final Durations durations;
+
+  String get bvid => _bvid!;
+
+  /// 当前播放视频的标识、进度与播放状态快照，用于鸿蒙跨设备接续；
+  /// 直播（由 LiveRoomController 提供快照）或无视频时为 null
+  Map<String, dynamic>? get playSnapshot {
+    if (isLive || _bvid == null || cid == null) {
+      return null;
+    }
+    return {
+      'type': 'video',
+      'aid': _aid,
+      'bvid': _bvid,
+      'cid': cid,
+      'epid': _epid,
+      'seasonId': _seasonId,
+      'pgcType': _pgcType,
+      'videoType': _videoType.name,
+      'progress': positionInMilliseconds,
+      'playing': playerStatus.isPlaying,
+      'onlyPlayAudio': onlyPlayAudio.value,
+    };
+  }
+
+  /// 视频播放速度
+  double get playbackSpeed => _playbackSpeed.value;
+
+  // 长按倍速
+  double get longPressSpeed => _longPressSpeed.value;
+
+  /// [videoPlayerController] instance of Player
+  Player? get videoPlayerController => _videoPlayerController;
+
+  /// 底层 Player 是否已不可用。
+  ///
+  /// media_kit 的 NativePlayer 一旦 dispose，任何 API（play/pause/seek/
+  /// setSubtitleTrack…）都会抛 `[Player] has been disposed`。页面退出、
+  /// 换源期间异步链路仍可能继续跑，调用前先用它兜底。
+  bool get playerDisposed {
+    final platform = _videoPlayerController?.platform;
+    return platform == null || (platform is NativePlayer && platform.disposed);
+  }
+
+  /// [videoController] instance of Player
+  VideoController? get videoController => _videoControllerNotifier.value;
+
+  bool isMuted = false;
+
+  /// 听视频
+  late final RxBool onlyPlayAudio = false.obs;
+
+  /// 镜像
+  late final RxBool flipX = false.obs;
+
+  late final RxBool flipY = false.obs;
+
+  final RxBool isBuffering = true.obs;
+
+  /// 全屏方向
+  // ignore: unnecessary_getters_setters
+  bool get isVertical => _isVertical;
+
+  set isVertical(bool value) {
+    _isVertical = value;
+    // 竖屏视频（含竖屏直播流）：同步给方向策略，在手机竖屏播放形态设备的
+    // 播放页整页锁竖向（非全屏与全屏一致），避免转动设备时窗口先转再被拉回。
+    if (OS.isHarmony) OrientationPolicy.setVideoVertical(value);
+  }
+
+  /// 弹幕开关
+  late final RxBool enableShowDanmaku = Pref.enableShowDanmaku.obs;
+  late final RxBool enableShowLiveDanmaku = Pref.enableShowLiveDanmaku.obs;
+  RxBool get enableShowDanmakuAdaptive =>
+      isLive ? enableShowLiveDanmaku : enableShowDanmaku;
+
+  late final bool autoPiP = Pref.autoPiP;
+  bool get isPipMode =>
+      ((Platform.isAndroid || OS.isHarmony) && Floating().isPipMode) ||
+      (PlatformUtils.isDesktop && isDesktopPip);
+
+  /// [isPipMode] 的响应式镜像（仅鸿蒙由 onPipModeChanged 驱动）。页面布局
+  /// 依赖 isPipMode 时应同时监听它触发重建，否则 PiP 结束时若无视口变化
+  /// 页面会滞留在画中画布局。
+  final RxBool pipModeRx = false.obs;
+  late bool isDesktopPip = false;
+  late Rect _lastWindowBounds;
+  static Rect? _lastPipBounds;
+
+  Rect _adjustPipBounds(Rect lastRect, Size size, double aspectRatio) {
+    final lastSize = lastRect.size;
+    final lastOrientation = lastSize.orientation;
+    final orientation = size.orientation;
+
+    if (lastOrientation != orientation) {
+      final double width, height;
+      switch (orientation) {
+        case .portrait:
+          if (lastSize.width > size.height) {
+            height = min(lastSize.width, _lastWindowBounds.size.height);
+            width = height * aspectRatio;
+          } else {
+            height = size.height;
+            width = size.width;
+          }
+        case .landscape:
+          if (lastSize.height > size.width) {
+            width = lastSize.height;
+            height = width / aspectRatio;
+          } else {
+            height = size.height;
+            width = size.width;
+          }
+      }
+
+      return _lastPipBounds = Rect.fromLTWH(
+        lastRect.left,
+        lastRect.top,
+        width,
+        height,
+      );
+    }
+    return _lastPipBounds = Rect.fromLTWH(
+      lastRect.left,
+      lastRect.top,
+      lastSize.width,
+      lastSize.width / aspectRatio,
+    );
+  }
+
+  bool updatePipBounds() {
+    if (isDesktopPip) {
+      windowManager.getBounds().then((rect) {
+        if (isDesktopPip) _lastPipBounds = rect;
+      });
+      return true;
+    }
+    return false;
+  }
+
+  late final showWindowTitleBar = Pref.showWindowTitleBar;
+  late final RxBool isAlwaysOnTop = false.obs;
+  Future<void> setAlwaysOnTop(bool value) {
+    isAlwaysOnTop.value = value;
+    return windowManager.setAlwaysOnTop(value);
+  }
+
+  Future<void> exitDesktopPip() {
+    isDesktopPip = false;
+    return Future.wait([
+      if (showWindowTitleBar)
+        windowManager.setTitleBarStyle(TitleBarStyle.normal),
+      windowManager.setMinimumSize(const Size(400, 700)),
+      windowManager.setBounds(_lastWindowBounds),
+      setAlwaysOnTop(false),
+      windowManager.setAspectRatio(0),
+    ]);
+  }
+
+  Future<void> enterDesktopPip() async {
+    if (isFullScreen.value) return;
+
+    isDesktopPip = true;
+
+    _lastWindowBounds = await windowManager.getBounds();
+
+    if (showWindowTitleBar) {
+      windowManager.setTitleBarStyle(TitleBarStyle.hidden);
+    }
+
+    const shortSide = 280.0;
+    const minShortSide = 160.0;
+    final Size size;
+    final Size minimumSize;
+    final state = videoPlayerController!.state;
+    int width = state.width ?? this.width ?? 16;
+    int height = state.height ?? this.height ?? 9;
+    if (width == 0) width = this.width ?? 16;
+    if (height == 0) height = this.height ?? 9;
+    final aspectRatio = width / height;
+    if (height > width) {
+      size = Size(shortSide, shortSide / aspectRatio);
+      minimumSize = Size(minShortSide, minShortSide / aspectRatio);
+    } else {
+      size = Size(shortSide * aspectRatio, shortSide);
+      minimumSize = Size(minShortSide * aspectRatio, minShortSide);
+    }
+
+    await windowManager.setMinimumSize(minimumSize);
+    setAlwaysOnTop(true);
+    if (_lastPipBounds != null) {
+      windowManager.setBounds(
+        _adjustPipBounds(_lastPipBounds!, size, aspectRatio),
+      );
+    } else {
+      windowManager.setSize(size);
+    }
+    windowManager.setAspectRatio(width / height);
+  }
+
+  void toggleDesktopPip() {
+    if (isDesktopPip) {
+      exitDesktopPip();
+    } else {
+      enterDesktopPip();
+    }
+  }
+
+  late bool _isAutoEnterPip = false;
+  bool get isAutoEnterPip => _isAutoEnterPip;
+
+  static bool get _isCurrVideoPage {
+    final routing = Get.routing;
+    if (routing.route is! GetPageRoute) {
+      return false;
+    }
+    return _isVideoPage(routing.current);
+  }
+
+  static bool _isVideoPage(String routeName) {
+    return routeName == '/videoV' || routeName == '/liveRoom';
+  }
+
+  Future<PiPStatus> enterPip({bool isAuto = false}) {
+    // 鸿蒙「横屏小窗」（系统小窗内切全屏，见 WindowFacts.isMiniWindowLandscape）
+    // 下手动进画中画只有黑屏：此时 floating 插件走 freeform 分支，先
+    // moveAbilityToBackground 再 startPiP，PiP 窗口的内容节点（customUIController，
+    // 由应用侧 ArkUI 承载）在应用已退到后台之后才创建——实测日志里主窗口
+    // visibility 1→0 比 "PiP XComponent loaded" 还早，且首帧尺寸也是错的
+    // （808x454vp，135ms 后才纠正为 413x232vp）。
+    // 小窗内不切全屏时同样走 freeform 分支但画面正常，故拦截条件取横屏小窗而非小窗。
+    // 这里直接拒绝，由调用方提示"当前处于系统小窗，无法进入画中画"。
+    // 退后台自动进入（isAuto，走系统 auto-start，次序正常）不受影响。
+    if (!isAuto && OS.isHarmony && WindowFacts.isMiniWindowLandscape) {
+      return Future.value(PiPStatus.unavailable);
+    }
+    if (videoPlayerController != null) {
+      final state = videoPlayerController!.state;
+      if (Platform.isIOS) {
+        if (videoController?.id.value case final textureId?) {
+          IOSPipHelper.enter(
+            textureId,
+            width: state.width == 0 ? width : state.width,
+            height: state.height == 0 ? height : state.height,
+            autoEnter: isAuto,
+            state: _iosPipState(state),
+          );
+          return Future.value(PiPStatus.enabled);
+        }
+        return Future.value(PiPStatus.unavailable);
+      }
+      return PageUtils.enterPip(
+        isAuto: isAuto,
+        width: state.width == 0 ? width : state.width,
+        height: state.height == 0 ? height : state.height,
+      );
+    }
+    return Future.value(PiPStatus.unavailable);
+  }
+
+  void _disableAutoEnterPip() {
+    if (_isAutoEnterPip) {
+      if (OS.isHarmony) {
+        Floating().setAutoPip(false);
+      } else if (Platform.isIOS) {
+        IOSPipHelper.disableAutoEnter();
+      } else {
+        Utils.channel.invokeMethod('setPipAutoEnterEnabled', {
+          'autoEnable': false,
+        });
+      }
+    }
+  }
+
+  Map<String, Object> _iosPipState(PlayerState state, [Duration? position]) {
+    return {
+      'isPlaying': playerStatus.isPlaying,
+      'isBuffering': isBuffering.value,
+      'isLive': isLive,
+      'position': (position ?? state.position).inMilliseconds,
+      'duration': durationInMilliseconds,
+      'speed': state.rate,
+    };
+  }
+
+  void _updateIOSPip([Duration? position]) {
+    if (Platform.isIOS && IOSPipHelper.needsUpdate) {
+      if (_videoPlayerController case final player?) {
+        IOSPipHelper.update(_iosPipState(player.state, position));
+      }
+    }
+  }
+
+  // 弹幕相关配置
+  late final enableTapDm = PlatformUtils.isMobile && Pref.enableTapDm;
+  late RuleFilter filters = Pref.danmakuFilterRule;
+  // 关联弹幕控制器
+  DanmakuController<DanmakuExtra>? danmakuController;
+  bool showDanmaku = true;
+  Set<int> dmState = <int>{};
+  late final mergeDanmaku = Pref.mergeDanmaku;
+  late final String midHash = getCrc32(
+    ascii.encode(Accounts.main.mid.toString()),
+    0,
+  ).toRadixString(16);
+  late final RxDouble danmakuOpacity = Pref.danmakuOpacity.obs;
+
+  late List<double> speedList = Pref.speedList;
+  late bool enableAutoLongPressSpeed = Pref.enableAutoLongPressSpeed;
+  late double longPressSpeedFactor = Pref.longPressSpeedFactor;
+  late final showControlDuration = Pref.enableLongShowControl
+      ? const Duration(seconds: 30)
+      : const Duration(seconds: 3);
+  // 字幕
+  late double subtitleFontScale = Pref.subtitleFontScale;
+  late double subtitleFontScaleFS = Pref.subtitleFontScaleFS;
+  late int subtitlePaddingH = Pref.subtitlePaddingH;
+  int? tmpSubtitlePaddingB;
+  late int subtitlePaddingB = Pref.subtitlePaddingB;
+  late double subtitleBgOpacity = Pref.subtitleBgOpacity;
+  final bool showVipDanmaku = Pref.showVipDanmaku; // loop unswitching
+  late double subtitleStrokeWidth = Pref.subtitleStrokeWidth;
+  late int subtitleFontWeight = Pref.subtitleFontWeight;
+
+  // settings
+  late final showFSActionItem = Pref.showFSActionItem;
+  late final enableShrinkVideoSize = Pref.enableShrinkVideoSize;
+  late final darkVideoPage = Pref.darkVideoPage;
+  late final enableSlideVolumeBrightness = Pref.enableSlideVolumeBrightness;
+  late final enableSlideFS = Pref.enableSlideFS;
+  late final enableScrollVolume = Pref.enableScrollVolume;
+  late final enableDragSubtitle = Pref.enableDragSubtitle;
+  late final fastForBackwardInSeconds = Pref.fastForBackwardDuration;
+  late final fastForBackwardDuration = Duration(
+    seconds: fastForBackwardInSeconds,
+  );
+
+  late final horizontalSeasonPanel = Pref.horizontalSeasonPanel;
+  late final preInitPlayer = Pref.preInitPlayer;
+  late final showRelatedVideo = Pref.showRelatedVideo;
+  late final showVideoReply = Pref.showVideoReply;
+  late final showBangumiReply = Pref.showBangumiReply;
+  late final reverseFromFirst = Pref.reverseFromFirst;
+  late final horizontalPreview = Pref.horizontalPreview;
+  late final showDmChart = Pref.showDmChart;
+  late final showViewPoints = Pref.showViewPoints;
+  late final showFsScreenshotBtn = Pref.showFsScreenshotBtn;
+  late final showFsLockBtn = Pref.showFsLockBtn;
+  late final keyboardControl = Pref.keyboardControl;
+  late final uiScale = Pref.uiScale;
+
+  late final bool autoEnterFullScreen = Pref.autoEnterFullScreen;
+  late final bool autoExitFullscreen = Pref.autoExitFullscreen;
+  late final bool autoPlayEnable = Pref.autoPlayEnable;
+  late final bool enableVerticalExpand = Pref.enableVerticalExpand;
+  late final bool pipNoDanmaku = Pref.pipNoDanmaku;
+
+  late final bool tempPlayerConf = Pref.tempPlayerConf;
+
+  // 统一由 VideoDetailController.queryVideoUrl 按当前链路首次赋值，不再按平台预置。
+  // 上游的 `PlatformUtils.isMobile ? null : ...` 是为了绕开 isWiFi 在桌面恒 false，
+  // 该守卫已在 ConnectivityUtils 中移除。
+  int? cacheVideoQa;
+  late int cacheAudioQa = Pref.defaultAudioQa;
+  bool enableHeart = true;
+  late final String? hwdec = Pref.enableHA ? Pref.hardwareDecoding : null;
+
+  late final bool enableHDR = Pref.enableHDR;
+
+  /// 当前播放源的画质，用于判断是否为 HDR 片源。由 [setDataSource] 传入。
+  VideoQuality? _hdrQuality;
+
+  /// BTR 当前会话令牌；旧 source 的缓冲/卡顿回调不得污染新会话。
+  int _ripperSessionId = 0;
+  int _lastRipperPositionMs = 0;
+
+  /// Coalesces async `demuxer-cache-idle` reads for BTR. The media_kit OHOS
+  /// fork exposes NativePlayer.getProperty as Future<String>; position events
+  /// must not issue one unthrottled mpv round-trip per frame.
+  final RipperCacheFullProbe _ripperCacheFullProbe = RipperCacheFullProbe();
+
+  /// Suppresses stall reporting only while a user seek/source reopen settles.
+  final RipperRestartGuard _ripperRestartGuard = RipperRestartGuard();
+  Timer? _ripperRestartWatchdog;
+  int _ripperRestartGeneration = 0;
+  int _ripperListenerEpoch = 0;
+
+  /// 鸿蒙上现在需要的视频输出，规则见 [OhosHdrOutput.output]；其他平台为 null。
+  ///
+  /// 平台视图没有单独的开关：关掉它等于关掉 HDR（元数据会在 Flutter 纹理那一步
+  /// 丢光），所以它不是一个用户能做的取舍，跟随「启用 HDR 视频」即可。
+  OhosOutput? get _ohosOutput => OS.isHarmony
+      ? OhosHdrOutput.output(
+          hdrEnabled: enableHDR,
+          quality: _hdrQuality,
+          displayHasNoHdr: HarmonyChannel.displayHasNoHdr,
+          displayMaySupportVivid: HarmonyChannel.displayMaySupportHdrVivid,
+          pipMode: isPipMode,
+          peakNits: Pref.hdrPeakNits,
+          matchVideo: Pref.hdrMatchVideoPeak,
+        )
+      : null;
+
+  /// 当前播放器创建时用的输出。
+  ///
+  /// 这些只在创建 Player 时写一次，与 [_ohosOutput] 不一致就得重建播放器：在
+  /// SDR 与 HDR 片源之间切换、进出画中画、面板能力在首个视频打开后才查到，或是
+  /// 改了峰值亮度设置。几档 HDR 之间切换得到的是同一个输出，不会重建。
+  OhosOutput? _appliedOutput;
+
+  late final progressType = Pref.btmProgressBehavior;
+  late final enableQuickDouble = Pref.enableQuickDouble;
+  late final fullScreenGestureReverse = Pref.fullScreenGestureReverse;
+
+  late final isRelative = Pref.useRelativeSlide;
+  late final offset = isRelative
+      ? Pref.sliderDuration / 100
+      : Pref.sliderDuration * 1000;
+
+  num get sliderScale => isRelative ? durationInMilliseconds * offset : offset;
+
+  // 播放顺序相关
+  late PlayRepeat playRepeat = Pref.playRepeat;
+
+  TextStyle get subTitleStyle => TextStyle(
+    height: 1.5,
+    fontSize:
+        16 * (isFullScreen.value ? subtitleFontScaleFS : subtitleFontScale),
+    letterSpacing: 0.1,
+    wordSpacing: 0.1,
+    color: Colors.white,
+    fontWeight: FontWeight.values[subtitleFontWeight],
+    backgroundColor: subtitleBgOpacity == 0
+        ? null
+        : Colors.black.withValues(alpha: subtitleBgOpacity),
+  );
+
+  late final Rx<SubtitleViewConfiguration> subtitleConfig = getSubConfig.obs;
+
+  SubtitleViewConfiguration get getSubConfig {
+    final subTitleStyle = this.subTitleStyle;
+    return SubtitleViewConfiguration(
+      style: subTitleStyle,
+      strokeStyle: subtitleBgOpacity == 0
+          ? subTitleStyle.copyWith(
+              color: null,
+              background: null,
+              backgroundColor: null,
+              foreground: Paint()
+                ..color = Colors.black
+                ..style = PaintingStyle.stroke
+                ..strokeWidth = subtitleStrokeWidth,
+            )
+          : null,
+      padding: EdgeInsets.only(
+        left: subtitlePaddingH.toDouble(),
+        right: subtitlePaddingH.toDouble(),
+        bottom: subtitlePaddingB.toDouble(),
+      ),
+      textScaler: TextScaler.noScaling,
+    );
+  }
+
+  void updateSubtitleStyle() {
+    subtitleConfig.value = getSubConfig;
+  }
+
+  void onUpdatePadding(EdgeInsets padding) {
+    tmpSubtitlePaddingB = null;
+    subtitlePaddingB = padding.bottom.round().clamp(0, 200);
+    updateSubtitleStyle();
+    putSubtitleSettings();
+  }
+
+  static PlPlayerController? get instance => _instance;
+
+  static bool instanceExists() {
+    return _instance != null;
+  }
+
+  static void setPlayCallBack(
+    PlayCallback? playCallBack, {
+    PlayOwner? playOwner,
+  }) {
+    _playCallBack = playCallBack;
+    _playOwner = playOwner;
+  }
+
+  static PlayOwner? _playOwner;
+  static PlayOwner? get playOwner => _playOwner;
+  static PlayCallback? _playCallBack;
+
+  static Future<void>? playIfExists() {
+    return _playCallBack?.call();
+  }
+
+  // try to get PlayerStatus
+  static PlayerStatus? getPlayerStatusIfExists() {
+    return _instance?.playerStatus;
+  }
+
+  static Future<void>? pauseIfExists({
+    bool notify = true,
+    bool isInterrupt = false,
+  }) {
+    if (_instance?.playerStatus.isPlaying ?? false) {
+      return _instance?.pause(notify: notify, isInterrupt: isInterrupt);
+    }
+    return null;
+  }
+
+  static Future<void>? seekToIfExists(
+    Duration position, {
+    bool isSeek = true,
+  }) {
+    return _instance?.seekTo(position, isSeek: isSeek);
+  }
+
+  static double? getVolumeIfExists() {
+    return _instance?.volume.value;
+  }
+
+  static Future<void>? setVolumeIfExists(
+    double volumeNew, {
+    bool showIndicator = true,
+  }) {
+    return _instance?.setVolume(volumeNew, showIndicator: showIndicator);
+  }
+
+  Box video = GStorage.video;
+
+  bool visible = true;
+
+  DeviceOrientation? _orientation;
+  StreamSubscription<OrientationParams>? _orientationListener;
+  // 对齐上游 ：监听旋转状态，Android/鸿蒙由checkIsAutoRotate原生读取系统旋转设置
+  bool get checkIsAutoRotate =>
+      (Platform.isAndroid || OS.isHarmony) && mode != .gravity;
+
+  /// 传感器报竖屏后，延迟确认再自动退出全屏的定时器。
+  ///
+  /// 鸿蒙侧的方向分类按 pitch/roll 判定（native_device_orientation fork 的
+  /// SensorOrientationListener），在侧躺、斜举、接近平放这些边界姿态下会偶发
+  /// 单帧误报竖屏。收到即退出全屏的话，紧接着下一帧回到横屏又会被 landscape
+  /// 分支自动拉回全屏，表现为「全屏自己退出又进入」。这里等设备确实稳定在
+  /// 竖屏之后再退，单帧误报会被后续的横屏事件取消掉。
+  Timer? _autoExitFsTimer;
+
+  /// 自动退出全屏前的确认时长。取值需大于误报的持续时间（几十~几百毫秒），
+  /// 同时又不至于让「真的转回竖屏」的退出手感明显变迟钝。
+  static const _autoExitFsDelay = Duration(milliseconds: 500);
+
+  void _cancelAutoExitFs() {
+    _autoExitFsTimer?.cancel();
+    _autoExitFsTimer = null;
+  }
+
+  /// 延迟确认后自动退出全屏。确认时重新校验全部前置条件，期间发生的任何变化
+  /// （转回横屏、手动进/退全屏、锁定控件、换成竖屏视频）都会让本次退出作废。
+  void _scheduleAutoExitFullScreen(DeviceOrientation orientation) {
+    _cancelAutoExitFs();
+    _autoExitFsTimer = Timer(_autoExitFsDelay, () {
+      _autoExitFsTimer = null;
+      if ((OS.isHarmony && WindowFacts.isWindowMode) ||
+          _orientation != orientation ||
+          !isFullScreen.value ||
+          isManualFS ||
+          horizontalScreen ||
+          _isVertical ||
+          controlsLock.value) {
+        return;
+      }
+      // 自动退出必须显式传 isManualFS: false，否则会按默认值记成手动退出：
+      // 既翻错 isManualFS 的语义，也会白白开启 600ms 的自动进全屏抑制窗。
+      triggerFullScreen(
+        status: false,
+        orientation: orientation,
+        isManualFS: false,
+      );
+    });
+  }
+
+  void _stopOrientationListener() {
+    _orientationListener?.cancel();
+    _orientationListener = null;
+    _cancelAutoExitFs();
+  }
+
+  void _onOrientationChanged(OrientationParams param) {
+    final deviceOrientation = param.orientation;
+    if (deviceOrientation == null) return;
+    _orientation = deviceOrientation;
+    if (OS.isHarmony && WindowFacts.isWindowMode) {
+      _cancelAutoExitFs();
+      return;
+    }
+    if (Platform.isIOS && !visible) return;
+    // 上游 c36ebfc9e：播控锁定时不更新方向（非鸿蒙平台生效；鸿蒙不创建传感器监听）
+    if (controlsLock.value) return;
+    final isFullScreen = this.isFullScreen.value;
+    if (checkIsAutoRotate &&
+        param.isAutoRotate != true &&
+        (!isFullScreen ||
+            _isVertical ||
+            deviceOrientation == .portraitUp ||
+            deviceOrientation == .portraitDown)) {
+      return;
+    }
+    switch (deviceOrientation) {
+      case .portraitUp:
+        if (!horizontalScreen && !_isVertical && isFullScreen) {
+          if (!isManualFS) {
+            // 自动进的全屏才跟随设备转回竖屏而退出；延迟确认，避免单帧误报
+            _scheduleAutoExitFullScreen(deviceOrientation);
+          }
+        } else {
+          _cancelAutoExitFs();
+          portraitUpMode();
+        }
+      case .portraitDown:
+        if (!horizontalScreen) return;
+        _cancelAutoExitFs();
+        portraitDownMode();
+      case .landscapeLeft:
+        _cancelAutoExitFs();
+        if (!horizontalScreen && !isFullScreen) {
+          triggerFullScreen(orientation: deviceOrientation, isManualFS: false);
+        } else {
+          landscapeLeftMode();
+        }
+      case .landscapeRight:
+        _cancelAutoExitFs();
+        if (!horizontalScreen && !isFullScreen) {
+          triggerFullScreen(orientation: deviceOrientation, isManualFS: false);
+        } else {
+          landscapeRightMode();
+        }
+    }
+  }
+
+  // 添加一个私有构造函数
+  PlPlayerController._() {
+    // 鸿蒙：屏幕方向由系统决定（含智感旋转），应用不再消费传感器方向做任何
+    // 决策——不再设方向、不再按倾斜自动进/退全屏。这里只给 Android/iOS 保留。
+    if (PlatformUtils.isMobile && !OS.isHarmony) {
+      _orientationListener = NativeDeviceOrientationCommunicator()
+          .onOrientationChanged(
+            checkIsAutoRotate: checkIsAutoRotate,
+            angleDegrees: Pref.angleDegrees,
+          )
+          .listen(_onOrientationChanged);
+    }
+
+    if (!Accounts.heartbeat.isLogin || Pref.historyPause) {
+      enableHeart = false;
+    }
+
+    if (autoPiP) {
+      if (Platform.isAndroid) {
+        if (DeviceUtils.sdkInt < 36) {
+          Utils.channel.setMethodCallHandler((call) async {
+            if (call.method == 'onUserLeaveHint') {
+              if (playerStatus.isPlaying && _isCurrVideoPage) {
+                enterPip();
+              }
+            }
+          });
+        } else {
+          _isAutoEnterPip = true;
+        }
+      } else if (OS.isHarmony) {
+        _isAutoEnterPip = true;
+      } else if (Platform.isIOS && IOSPipHelper.isAvailable) {
+        _isAutoEnterPip = true;
+      }
+    }
+  }
+
+  // 获取实例 传参
+  static PlPlayerController getInstance({bool isLive = false}) {
+    // 如果实例尚未创建，则创建一个新实例
+    return (_instance ??= PlPlayerController._())
+      ..isLive = isLive
+      .._playerCount += 1;
+  }
+
+  bool _processing = false;
+  bool get processing => _processing;
+
+  /// Arms the BTR transition guard before a source open or seek can emit its
+  /// first buffering event.
+  ///
+  /// The primary release is `buffering == false`. The watchdog is the last
+  /// resort because media_kit offers no bounded "restart finished" future: a
+  /// disposed player or a failed source may never emit either event. Ten
+  /// seconds is longer than a normal local transition and matches the
+  /// controller's existing ten-second probe window; it is released early by
+  /// every normal event.
+  void _beginRipperRestart() {
+    if (_ripperSessionId == 0 ||
+        RipperPlayerBridge.instance.autoConcurrency == null) {
+      return;
+    }
+    _ripperCacheFullProbe.invalidate();
+    _ripperRestartGuard.begin(alreadyBuffering: isBuffering.value);
+    _ripperRestartWatchdog?.cancel();
+    final int generation = ++_ripperRestartGeneration;
+    _ripperRestartWatchdog = Timer(const Duration(seconds: 10), () {
+      if (generation != _ripperRestartGeneration) return;
+      _ripperRestartGuard.expire();
+      _ripperRestartWatchdog = null;
+    });
+  }
+
+  void _clearRipperRestart() {
+    _ripperRestartGeneration += 1;
+    _ripperRestartWatchdog?.cancel();
+    _ripperRestartWatchdog = null;
+    _ripperRestartGuard.clear();
+  }
+
+  void _resetRipperFeedbackForSource() {
+    // Invalidate callbacks from the previous NativePlayer before a new source's
+    // listeners are installed.
+    _ripperListenerEpoch += 1;
+    _ripperCacheFullProbe.invalidate();
+    _clearRipperRestart();
+  }
+
+  /// Reads `demuxer-cache-idle` at a bounded rate. mpv defines this property as
+  /// "the demuxer cache is filled to the requested amount and is currently not
+  /// reading more data"; unknown/empty/failed reads mean false.
+  void _refreshRipperCacheFull(int session) {
+    if (session == 0 || RipperPlayerBridge.instance.autoConcurrency == null) {
+      return;
+    }
+    final int? token = _ripperCacheFullProbe.begin(session: session);
+    if (token == null) return;
+
+    NativePlayer? nativePlayer;
+    try {
+      nativePlayer = _videoPlayerController?.platform?.maybeAsNativePlayer;
+    } on Object {
+      nativePlayer = null;
+    }
+    if (nativePlayer == null) {
+      _ripperCacheFullProbe.fail(token, session: session);
+      return;
+    }
+
+    // A local mpv property read should be immediate. The timeout is a
+    // liveness guard, not a playback deadline: if the NativePlayer is disposed
+    // or never finishes initialization, inFlight must not stay true forever.
+    unawaited(
+      nativePlayer
+          .getProperty('demuxer-cache-idle')
+          .timeout(const Duration(seconds: 2))
+          .then(
+            (String value) {
+              if (_ripperSessionId != session) return;
+              _ripperCacheFullProbe.complete(
+                token,
+                session: session,
+                value: value,
+              );
+            },
+            onError: (Object _) {
+              if (_ripperSessionId == session) {
+                _ripperCacheFullProbe.fail(token, session: session);
+              }
+            },
+          ),
+    );
+  }
+
+  // offline
+  bool get isFileSource => dataSource is FileSource;
+
+  // 初始化资源
+  //
+  // 播放器是全局单例，多个视频页共享同一实例。setDataSource 内部会异步
+  // 创建 media_kit Player（_initPlayer）。若并发调用（如 preInitPlayer
+  // 页面初始化进行中，另一个 autoPlay 页面又进入——autoPlay 分支不检查
+  // processing），会同时创建多个 Player，后创建的覆盖先创建的，先创建的
+  // 失去引用后永不释放，造成原生播放器与流监听泄漏。这里用 Future 队列
+  // 将初始化串行化，保证同一时刻只有一个 _setDataSource 在执行。
+  Future<void> setDataSource(
+    DataSource dataSource, {
+    bool isLive = false,
+    bool autoplay = true,
+    // 初始化播放位置
+    Duration? seekTo,
+    // 初始化播放速度
+    double speed = 1.0,
+    int? width,
+    int? height,
+    Duration? duration,
+    // 方向
+    bool? isVertical,
+    // 记录历史记录
+    int? aid,
+    String? bvid,
+    int? cid,
+    int? epid,
+    int? seasonId,
+    int? pgcType,
+    VideoType? videoType,
+    VoidCallback? onInit,
+    Volume? volume,
+    bool autoFullScreenFlag = false,
+    // 当前片源画质，用于判断是否需要按 HDR 输出
+    VideoQuality? quality,
+  }) {
+    return _playerQueue.run(
+      () => _setDataSource(
+        dataSource,
+        isLive: isLive,
+        autoplay: autoplay,
+        seekTo: seekTo,
+        speed: speed,
+        width: width,
+        height: height,
+        duration: duration,
+        isVertical: isVertical,
+        aid: aid,
+        bvid: bvid,
+        cid: cid,
+        epid: epid,
+        seasonId: seasonId,
+        pgcType: pgcType,
+        videoType: videoType,
+        onInit: onInit,
+        volume: volume,
+        autoFullScreenFlag: autoFullScreenFlag,
+        quality: quality,
+      ),
+    );
+  }
+
+  Future<void> _setDataSource(
+    DataSource dataSource, {
+    bool isLive = false,
+    bool autoplay = true,
+    // 初始化播放位置
+    Duration? seekTo,
+    // 初始化播放速度
+    double speed = 1.0,
+    int? width,
+    int? height,
+    Duration? duration,
+    // 方向
+    bool? isVertical,
+    // 记录历史记录
+    int? aid,
+    String? bvid,
+    int? cid,
+    int? epid,
+    int? seasonId,
+    int? pgcType,
+    VideoType? videoType,
+    VoidCallback? onInit,
+    Volume? volume,
+    bool autoFullScreenFlag = false,
+    // 当前片源画质，用于判断是否需要按 HDR 输出
+    VideoQuality? quality,
+  }) async {
+    // BTR-BEGIN
+    // A new source always starts a new download session.
+    _ripperSessionId = 0;
+    _lastRipperPositionMs = 0;
+    _resetRipperFeedbackForSource();
+    await RipperPlayerBridge.instance.close();
+    // BTR-END
+    try {
+      _processing = true;
+      this.isLive = isLive;
+      _videoType = videoType ?? VideoType.ugc;
+      this.width = width;
+      this.height = height;
+      this.dataSource = dataSource;
+      _autoPlay = autoplay;
+      // 初始化数据加载状态
+      dataStatus.value = DataStatus.loading;
+      // 初始化全屏方向
+      _isVertical = isVertical ?? false;
+      _aid = aid;
+      _bvid = bvid;
+      this.cid = cid;
+      _epid = epid;
+      _seasonId = seasonId;
+      _pgcType = pgcType;
+      // 必须在创建 VideoController 之前赋值：输出方式（平台视图 / HDR 信令）
+      // 在播放器初始化时就要确定。
+      _hdrQuality = quality;
+      if (!isLive && bvid != null && cid != null) {
+        HarmonyChannel.holdContinuation(this);
+      } else {
+        HarmonyChannel.releaseContinuation(this);
+      }
+
+      if (showSeekPreview) {
+        _clearPreview();
+      }
+      cancelLongPressTimer();
+      if (_videoPlayerController != null &&
+          _videoPlayerController!.state.playing) {
+        await pause(notify: false);
+      }
+
+      if (_playerCount == 0) {
+        return;
+      }
+      // 配置Player 音轨、字幕等等
+      await _createVideoController(dataSource, seekTo, volume);
+
+      if (_playerCount == 0) {
+        _removeListeners();
+        await _disposePlayerSafely(_videoPlayerController);
+        _videoPlayerController = null;
+        _videoControllerNotifier.value = null;
+        return;
+      }
+
+      updateDuration(duration ?? _videoPlayerController!.state.duration);
+      position.value = buffered.value = seekTo?.inSeconds ?? 0;
+
+      dataStatus.value = .loaded;
+
+      if (autoFullScreenFlag && autoEnterFullScreen) {
+        triggerFullScreen(status: true);
+      }
+
+      await _initializePlayer();
+      onInit?.call();
+    } catch (err, stackTrace) {
+      // A failed/open-cancelled player must not leave a restart guard, a cache
+      // probe, or a proxy session that never became active.
+      _ripperSessionId = 0;
+      _resetRipperFeedbackForSource();
+      unawaited(RipperPlayerBridge.instance.close());
+      dataStatus.value = DataStatus.error;
+      if (kDebugMode) {
+        debugPrint(stackTrace.toString());
+        debugPrint('plPlayer err:  $err');
+      }
+    } finally {
+      _processing = false;
+    }
+  }
+
+  String? shadersDirPath;
+  Future<String> get copyShadersToExternalDirectory async {
+    if (shadersDirPath != null) {
+      return shadersDirPath!;
+    }
+
+    return shadersDirPath = await AssetUtils.getOrCopy(
+      'assets/shaders',
+      Assets.mpvAnime4KShaders.followedBy(Assets.mpvAnime4KShadersLite),
+      path.join(appSupportDirPath, 'anime_shaders'),
+    );
+  }
+
+  late final isAnim = _pgcType == 1 || _pgcType == 4;
+  late final Rx<SuperResolutionType> superResolutionType =
+      (isAnim ? Pref.superResolutionType : SuperResolutionType.disable).obs;
+  Future<void> setShader([SuperResolutionType? type, NativePlayer? pp]) async {
+    if (type == null) {
+      type = superResolutionType.value;
+    } else {
+      superResolutionType.value = type;
+      if (isAnim && !tempPlayerConf) {
+        setting.put(SettingBoxKey.superResolutionType, type.index);
+      }
+    }
+    pp ??= _videoPlayerController!.platform!.maybeAsNativePlayer;
+    await pp.waitForPlayerInitialization;
+    await pp.waitForVideoControllerInitializationIfAttached;
+    switch (type) {
+      case SuperResolutionType.disable:
+        return pp.command(const ['change-list', 'glsl-shaders', 'clr', '']);
+      case SuperResolutionType.efficiency:
+        return pp.command([
+          'change-list',
+          'glsl-shaders',
+          'set',
+          PathUtils.buildShadersAbsolutePath(
+            await copyShadersToExternalDirectory,
+            Assets.mpvAnime4KShadersLite,
+          ),
+        ]);
+      case SuperResolutionType.quality:
+        return pp.command([
+          'change-list',
+          'glsl-shaders',
+          'set',
+          PathUtils.buildShadersAbsolutePath(
+            await copyShadersToExternalDirectory,
+            Assets.mpvAnime4KShaders,
+          ),
+        ]);
+    }
+  }
+
+  Future<Player> _initPlayer(OhosOutput? output) async {
+    assert(_videoPlayerController == null);
+    final opt = {
+      'video-sync': Pref.videoSync,
+      if (Platform.isAndroid) 'ao': Pref.audioOutput,
+      'stream-lavf-o': 'reconnect=1',
+      'volume':
+          (PlatformUtils.isMobile ? Pref.playerVolume : volume.value * 100)
+              .toString(),
+      // 鸿蒙 media_kit fork 未内置 volume-max（上游换 fork 后删除了这项）
+      'volume-max': kMaxVolume.toString(),
+      // 按设定峰值色调映射时测量片源的实际峰值，盖掉 media-kit 默认的 no
+      if (OhosHdrOutput.measuresPeak(output)) 'hdr-compute-peak': 'yes',
+    };
+    final autosync = Pref.autosync;
+    if (autosync != '0') {
+      opt['autosync'] = autosync;
+    }
+
+    final player = Player(
+      configuration: const PlayerConfiguration(
+        logLevel: kDebugMode ? .warn : .error,
+      ),
+    );
+
+    final pp = player.platform!.maybeAsNativePlayer;
+    for (var o in opt.entries) {
+      pp.setProperty(o.key, o.value);
+    }
+
+    assert(videoController == null);
+
+    _videoControllerNotifier.value = VideoController(
+      player,
+      configuration: VideoControllerConfiguration(
+        enableHardwareAcceleration: hwdec != null,
+        androidAttachSurfaceAfterVideoParameters: false,
+        hwdec: hwdec,
+        usePlatformView: output?.platformView ?? false,
+        ohosHdrMode: output?.hdrMode,
+        ohosHdrTargetPeak: output?.targetPeak,
+      ),
+    );
+    // await player.setAudioTrack(.auto());
+
+    if (Platform.isAndroid) {
+      // Avoid sizing the surface using mpv's idle window between media loads.
+      pp.setProperty('force-window', 'no');
+    }
+
+    _startListeners(player.platform!.maybeAsNativePlayer);
+
+    return player;
+  }
+
+  Map<String, String>? _buffer;
+  Map<String, String> get buffer =>
+      _buffer ??= Pref.initBuffer(_playbackSpeed.value);
+  Map<String, String>? _liveBuffer;
+  Map<String, String> get liveBuffer => _liveBuffer ??= Pref.initLiveBuffer();
+
+  // 配置播放器
+  Future<void> _createVideoController(
+    DataSource dataSource,
+    Duration? seekTo,
+    Volume? volume, {
+    // 渲染路径重建是同一个片源接着播，屏上的弹幕和心跳进度都要留着
+    bool isRebuild = false,
+  }) async {
+    // A render-path rebuild creates a new NativePlayer too; old async property
+    // reads and the old transition guard must not survive into it.
+    _resetRipperFeedbackForSource();
+    isBuffering.value = false;
+    if (!isRebuild) {
+      _heartDuration = 0;
+      danmakuController?.clear();
+    }
+
+    var player = _videoPlayerController;
+
+    // 输出在 VideoController 创建时就固定了，改不了，与现在需要的不一致就必须
+    // 重建播放器，见 [_appliedOutput]。
+    if (player != null && _appliedOutput != _ohosOutput) {
+      _removeListeners();
+      await _disposePlayerSafely(player);
+      player = null;
+      _videoPlayerController = null;
+      _videoControllerNotifier.value = null;
+    }
+
+    if (player == null) {
+      final output = _ohosOutput;
+      _appliedOutput = output;
+      player = await _initPlayer(output);
+      if (_playerCount == 0) {
+        _removeListeners();
+        await _disposePlayerSafely(player);
+        player = null;
+        _videoControllerNotifier.value = null;
+        return;
+      }
+      _videoPlayerController = player;
+      if (isAnim && superResolutionType.value != .disable) {
+        await setShader();
+      }
+    }
+
+    final Map<String, String> extras = {};
+
+    if (dataSource is FileSource) {
+      extras['cache'] = 'no';
+    } else {
+      if (isLive) {
+        extras.addAll(liveBuffer);
+      } else {
+        extras.addAll(buffer);
+      }
+    }
+
+    String video = dataSource.videoSource;
+    // BTR-BEGIN
+    // When the switch is on and the caller supplied candidates, the media URL
+    // becomes a loopback one. Any failure falls back to the direct source.
+    String? btrAudioSource = dataSource.audioSource;
+    if (RipperPrefs.enabled &&
+        dataSource is NetworkSource &&
+        dataSource.videoCandidates?.isNotEmpty == true) {
+      try {
+        // Audio acceleration off: hand an empty audio list to the accelerator
+        // so it only proxies video. The player keeps the direct audio URL,
+        // which is exactly the pre-BTR behaviour for that track.
+        final bool accelerateAudio = RipperPrefs.audioAcceleration;
+        final bool started = await RipperPlayerBridge.instance.open(
+          videoUrls: dataSource.videoCandidates!.map(Uri.parse).toList(),
+          audioUrls: accelerateAudio
+              ? (dataSource.audioCandidates ?? const <String>[])
+                    .map(Uri.parse)
+                    .toList()
+              : const <Uri>[],
+          settings: RipperPrefs.currentSettings,
+          mode: RipperPrefs.mode,
+          customHosts: RipperPrefs.customHosts,
+          userAgent: BrowserUa.pc,
+          media: dataSource.ripperMedia,
+          auto: dataSource.ripperAutoConcurrency,
+        );
+        if (started) {
+          _ripperSessionId = RipperPlayerBridge.instance.sessionId;
+          video = RipperPlayerBridge.instance.proxiedVideoUrl;
+          if (dataSource.audioCandidates?.isNotEmpty == true &&
+              RipperPlayerBridge.instance.proxiedAudioUrl.isNotEmpty) {
+            btrAudioSource = RipperPlayerBridge.instance.proxiedAudioUrl;
+          }
+        } else {
+          _ripperSessionId = 0;
+        }
+      } on Object {
+        // The accelerator must never break playback.
+        _ripperSessionId = 0;
+        await RipperPlayerBridge.instance.close();
+      }
+    }
+    // BTR-END
+    if (btrAudioSource case final audio? when (audio.isNotEmpty)) {
+      if (onlyPlayAudio.value) {
+        video = audio;
+      } else {
+        var audioUri = Platform.isWindows
+            ? audio.replaceAll(';', '\\;')
+            : audio.replaceAll(':', '\\:');
+        extras['audio-files'] = audioUri;
+        player.platform!.maybeAsNativePlayer.setProperty(
+          'audio-files',
+          audioUri,
+        );
+      }
+      audioFilterExtras(volume, map: extras);
+    } else {
+      // 修复 Bug：从视频页返回直播间后，声音变成刚才视频的声音。
+      // 原因：当前版本改用 NativePlayer.setProperty 直接设置 audio-files，
+      // 该属性会持久化在复用的 Player 实例上；而 2.0.1 及之前版本是通过
+      // Media.extras 传入 audio-files，每次 player.open 都会随新 Media 重置。
+      // 当切换到无单独音频源的内容（如直播、关闭听视频）时，必须主动清空
+      // audio-files，否则旧视频的外部音轨会继续播放，导致画面与声音不一致。
+      player.platform!.maybeAsNativePlayer.setProperty('audio-files', '');
+    }
+
+    assert(!isLive || seekTo == null);
+    // Arm before open(): media_kit may emit buffering while open() is still
+    // awaiting, before the first position event reaches this controller.
+    _beginRipperRestart();
+    await player.open(
+      Media(
+        video,
+        httpHeaders: {
+          'user-agent': BrowserUa.pc,
+          'referer': HttpString.baseUrl,
+        },
+        start: seekTo,
+        extras: extras.isEmpty ? null : extras,
+      ),
+      play: false,
+    );
+  }
+
+  Future<bool?> refreshPlayer() async {
+    if (dataSource is FileSource) {
+      return null;
+    }
+    if (_videoPlayerController == null) {
+      // SmartDialog.showToast('视频播放器为空，请重新进入本页面');
+      return false;
+    }
+    if (dataSource.videoSource.isNullOrEmpty) {
+      SmartDialog.showToast('视频源为空，请重新进入本页面');
+      return false;
+    }
+    String? audioUri;
+    // BTR-BEGIN
+    // A refresh keeps the running proxy session; if it was closed, the direct
+    // source is used again.
+    String sourceVideo = dataSource.videoSource;
+    String? sourceAudio = dataSource.audioSource;
+    if (RipperPlayerBridge.instance.isActive) {
+      final String proxiedVideo =
+          RipperPlayerBridge.instance.proxiedVideoUrl;
+      if (proxiedVideo.isNotEmpty) sourceVideo = proxiedVideo;
+      final String proxiedAudio = RipperPlayerBridge.instance.proxiedAudioUrl;
+      if (proxiedAudio.isNotEmpty) sourceAudio = proxiedAudio;
+    }
+    // BTR-END
+    if (!isLive) {
+      if (sourceAudio.isNullOrEmpty) {
+        SmartDialog.showToast('音频源为空');
+      } else {
+        audioUri = Platform.isWindows
+            ? sourceAudio!.replaceAll(';', '\\;')
+            : sourceAudio!.replaceAll(':', '\\:');
+        await (_videoPlayerController!.platform!).maybeAsNativePlayer
+            .setProperty('audio-files', audioUri);
+      }
+    } else {
+      // 与 _createVideoController 保持一致：直播等无外部音频源的场景下，
+      // 刷新播放源前必须清空残留的 audio-files，防止旧视频音频继续播放。
+      await (_videoPlayerController!.platform!).maybeAsNativePlayer.setProperty(
+        'audio-files',
+        '',
+      );
+    }
+    // Reopening the same source is a transition too; guard its first
+    // buffering event exactly like a user seek.
+    _beginRipperRestart();
+    try {
+      await _videoPlayerController!.open(
+        Media(
+          sourceVideo,
+          start: isLive
+              ? null
+              : Duration(milliseconds: positionInMilliseconds),
+          extras: audioUri == null ? null : {'audio-files': '"$audioUri"'},
+        ),
+        play: true,
+      );
+    } catch (_) {
+      _clearRipperRestart();
+      rethrow;
+    }
+    return true;
+    // seekTo(currentPos);
+  }
+
+  // 开始播放
+  Future<void> _initializePlayer() async {
+    if (_instance == null) return;
+    // 设置倍速
+    if (_videoPlayerController != null) {
+      final speed = isLive ? 1.0 : playbackSpeed;
+      if (_videoPlayerController!.state.rate != speed) {
+        await setPlaybackSpeed(speed);
+      }
+    }
+    _initVideoFit();
+
+    // 自动播放
+    if (_autoPlay) {
+      playIfExists();
+    }
+  }
+
+  List<StreamSubscription>? _subscriptions;
+  final Set<ValueChanged<Duration>> _positionListeners = {};
+  final Set<ValueChanged<PlayerStatus>> _statusListeners = {};
+
+  Timer? _wakeLockTimer;
+
+  void _startWakeLockTimer() {
+    _wakeLockTimer?.cancel();
+    _wakeLockTimer = Timer(
+      const Duration(milliseconds: 500),
+      _stopWakeLock,
+    );
+  }
+
+  void _stopWakeLockTimer() {
+    _wakeLockTimer?.cancel();
+    _wakeLockTimer = null;
+  }
+
+  void _stopWakeLock() {
+    WakelockPlus.disable();
+    _updatePlaybackState(debugLabel: 'onVideoPaused');
+  }
+
+  void _updatePlaybackState({Duration? position, String? debugLabel}) {
+    videoPlayerServiceHandler?.onUpdateState(
+      playerStatus,
+      isBuffering.value,
+      isLive,
+      position: position ?? _videoPlayerController!.state.position,
+      speed: playbackSpeed,
+      debugLabel: debugLabel,
+    );
+    _updateIOSPip(position);
+  }
+
+  /// 播放事件监听
+  void _startListeners(NativePlayer player) {
+    assert(_subscriptions == null);
+    final int listenerEpoch = ++_ripperListenerEpoch;
+    if (OS.isHarmony) {
+      _startStallWatchdog();
+      Floating().onPipAction = _onPipAction;
+      // isPipMode 是普通 bool，build 读它不产生依赖；PiP 结束时若窗口尺寸
+      // 恰好没变（如画中画期间从应用栏以小窗打开 app），没有任何重建时机，
+      // 页面会冻结在画中画布局。用回调驱动 pipModeRx，页面据此重建。
+      Floating().onPipModeChanged = (v) {
+        pipModeRx.value = v;
+        // 画中画是另一块 XComponent，平台视图不会跟过去（PiP 窗口里一片空白），
+        // 回到应用时也要切回来。渲染路径在 VideoController 创建时固定，
+        // 只能重建播放器。
+        unawaited(_playerQueue.requestRebuild());
+      };
+      pipModeRx.value = Floating().isPipMode;
+    }
+    final stream = player.stream;
+    _subscriptions = [
+      // 播放中改了「匹配视频亮度」或峰值亮度也要生效：与当前播放器的输出
+      // 不一致时重建播放器，进度和播放状态都保留。
+      if (OS.isHarmony)
+        for (final key in const [
+          SettingBoxKey.hdrMatchVideoPeak,
+          SettingBoxKey.hdrPeakNits,
+        ])
+          GStorage.setting
+              .watch(key: key)
+              .listen((_) => unawaited(_playerQueue.requestRebuild())),
+
+      /// playing
+      stream.playing.listen((bool playing) {
+        if (playing) {
+          playerStatus = .playing;
+          _stopWakeLockTimer();
+          _updatePlaybackState();
+          WakelockPlus.enable();
+
+          if (_isAutoEnterPip) {
+            if (_isCurrVideoPage) {
+              enterPip(isAuto: true);
+            } else {
+              _disableAutoEnterPip();
+            }
+          }
+        } else {
+          // 鸿蒙：退后台引发的暂停不取消自动画中画，否则该取消操作会与系统
+          // 自动小窗的启动赛跑，导致自动小窗时灵时不灵（Android 的 PiP
+          // auto-enter 与离开手势原子执行，无此问题）。仅在应用处于前台
+          // （用户主动暂停）时才取消。
+          if (!OS.isHarmony ||
+              WidgetsBinding.instance.lifecycleState ==
+                  AppLifecycleState.resumed) {
+            _disableAutoEnterPip();
+          }
+          playerStatus = .paused;
+          // 鸿蒙：进入画中画的退后台过程中，系统会直接把 mpv 置为暂停
+          //（应用层无任何 pause 调用，插桩证实；auto-start 武装与否均如此）。
+          // 画中画窗口可见即应继续播放，且普通 play() 即可恢复（等效于
+          // 用户按面板播放键），这里自动补上。_pauseRequestedByApp 排除
+          // 用户/业务暂停，频率闸防止与系统拉锯。
+          if (OS.isHarmony &&
+              !_pauseRequestedByApp &&
+              isPipMode &&
+              !(videoPlayerController?.state.completed ?? false) &&
+              _pipAutoResumeAllowed()) {
+            play();
+          }
+
+          _startWakeLockTimer();
+          _updateIOSPip();
+        }
+        if (OS.isHarmony) {
+          // 同步鸿蒙小窗控制面板的播放/暂停图标
+          Floating().updatePipControlStatus(playing: playing);
+        }
+
+        for (final element in _statusListeners) {
+          element(playing ? .playing : .paused);
+        }
+
+        final seconds = videoPlayerController!.state.position.inSeconds;
+        if (seconds != 0) {
+          makeHeartBeat(seconds, type: .status);
+        }
+      }),
+
+      ///completed
+      stream.completed.listen((bool completed) {
+        if (completed) {
+          playerStatus = .completed;
+          _startWakeLockTimer();
+
+          for (final element in _statusListeners) {
+            element(.completed);
+          }
+
+          makeHeartBeat(-1, type: .completed);
+        }
+      }),
+
+      /// position
+      stream.position.listen((Duration position) {
+        final posInSeconds = position.inSeconds;
+        // BTR-BEGIN
+        final bool btrCurrent = listenerEpoch == _ripperListenerEpoch;
+        if (btrCurrent) {
+          final int positionMs = position.inMilliseconds;
+          if (_ripperSessionId != 0 && _lastRipperPositionMs > 0) {
+            final int jump =
+                (positionMs - _lastRipperPositionMs).abs();
+            if (jump > 2500) {
+              RipperPlayerBridge.instance.onSeek(session: _ripperSessionId);
+            }
+          }
+          _lastRipperPositionMs = positionMs;
+          if (_ripperSessionId != 0) {
+            // Cache status is safe to refresh during a transition; only the
+            // consuming buffer/stall feedback is suppressed by the guard.
+            _refreshRipperCacheFull(_ripperSessionId);
+          }
+          if (!_ripperRestartGuard.active &&
+              position > Duration.zero &&
+              playerStatus.isPlaying &&
+              _ripperSessionId != 0) {
+            final int bufferedMs =
+                _videoPlayerController?.state.buffer.inMilliseconds ?? 0;
+            RipperPlayerBridge.instance.onBuffer(
+              (bufferedMs - positionMs) / 1000.0,
+              true,
+              cacheFull: _ripperCacheFullProbe.cacheFull,
+              waiting: isBuffering.value,
+              session: _ripperSessionId,
+            );
+          }
+        }
+        // BTR-END
+
+        if (posInSeconds != this.position.value) {
+          if (posInSeconds == 0 && playerStatus.isPlaying) {
+            _updatePlaybackState(position: position);
+          }
+
+          this.position.value = posInSeconds;
+
+          makeHeartBeat(posInSeconds);
+        }
+
+        for (final element in _positionListeners) {
+          element(position);
+        }
+      }),
+      stream.duration.listen((Duration duration) {
+        updateDuration(duration);
+        _updateIOSPip();
+      }),
+      stream.buffer.listen((Duration buffer) {
+        buffered.value = buffer.inSeconds;
+      }),
+      stream.buffering.listen((bool buffering) {
+        isBuffering.value = buffering;
+        // BTR-BEGIN
+        // A seek/reopen buffering transition is not a stall. Suppress both
+        // stall() and the waiting buffer sample: either one can raise the
+        // adaptive limit while the player is still settling.
+        final bool btrCurrent = listenerEpoch == _ripperListenerEpoch;
+        if (btrCurrent && _ripperRestartGuard.active) {
+          _ripperRestartGuard.observeBuffering(buffering);
+        }
+        if (btrCurrent && _ripperSessionId != 0) {
+          _refreshRipperCacheFull(_ripperSessionId);
+        }
+        if (btrCurrent &&
+            !_ripperRestartGuard.active &&
+            buffering &&
+            playerStatus.isPlaying &&
+            position.value > 0) {
+          RipperPlayerBridge.instance.onStall(session: _ripperSessionId);
+          if (_ripperSessionId != 0) {
+            final int bufferedMs =
+                _videoPlayerController?.state.buffer.inMilliseconds ?? 0;
+            RipperPlayerBridge.instance.onBuffer(
+              (bufferedMs - positionInMilliseconds) / 1000.0,
+              true,
+              cacheFull: _ripperCacheFullProbe.cacheFull,
+              waiting: true,
+              session: _ripperSessionId,
+            );
+          }
+        }
+        // BTR-END
+        if (!playerStatus.isCompleted) {
+          _stopWakeLockTimer();
+          _updatePlaybackState();
+        }
+      }),
+      if (kDebugMode)
+        stream.log.listen(((PlayerLog log) {
+          if (log.level == 'error' || log.level == 'fatal') {
+            Utils.reportError('${log.level}: ${log.prefix}: ${log.text}', null);
+          } else {
+            debugPrint(log.toString());
+          }
+        })),
+      stream.error.listen((String event) {
+        if (dataSource is FileSource &&
+            event.startsWith("Failed to open file")) {
+          return;
+        }
+        if (isLive) {
+          if (event.startsWith('tcp: ffurl_read returned ') ||
+              event.startsWith("Failed to open https://") ||
+              event.startsWith("Can not open external file https://")) {
+            Timer(const Duration(milliseconds: 3000), refreshPlayer);
+          }
+          return;
+        }
+        // BTR-BEGIN
+        // Loopback failures close the session first: the retry then opens the
+        // direct CDN URL instead of the dead proxy URL.
+        if (listenerEpoch == _ripperListenerEpoch &&
+            event.startsWith('Failed to open http://127.0.0.1:')) {
+          // The proxy is dead; do not arm a restart guard for a session that
+          // no longer exists, and let the retry use the direct URL cleanly.
+          _ripperSessionId = 0;
+          _resetRipperFeedbackForSource();
+          unawaited(RipperPlayerBridge.instance.close());
+          EasyThrottle.throttle(
+            'controllerStream.error.btrProxy',
+            const Duration(seconds: 10),
+            () => Timer(const Duration(seconds: 3), refreshPlayer),
+          );
+          return;
+        }
+        // BTR-END
+        if (event.startsWith("Failed to open https://") ||
+            event.startsWith("Can not open external file https://") ||
+            //tcp: ffurl_read returned 0xdfb9b0bb
+            //tcp: ffurl_read returned 0xffffff99
+            event.startsWith('tcp: ffurl_read returned ')) {
+          EasyThrottle.throttle(
+            'controllerStream.error.listen',
+            const Duration(milliseconds: 10000),
+            () {
+              Timer(const Duration(milliseconds: 3000), () {
+                // if (kDebugMode) {
+                //   debugPrint("isBuffering.value: ${isBuffering.value}");
+                // }
+                // if (kDebugMode) {
+                //   debugPrint("_buffered.value: ${_buffered.value}");
+                // }
+                if (isBuffering.value && buffered.value == 0) {
+                  SmartDialog.showToast(
+                    '视频链接打开失败，重试中',
+                    displayTime: const Duration(milliseconds: 500),
+                  );
+                  refreshPlayer();
+                }
+              });
+            },
+          );
+        } else if (event.contains('Invalid NAL unit size') ||
+            event.contains('Error splitting the input into NAL') ||
+            event.contains('Stream ends prematurely')) {
+          EasyThrottle.throttle(
+            'controllerStream.nal.error',
+            const Duration(milliseconds: 5000),
+            refreshPlayer,
+          );
+          Utils.reportError(event);
+        } else if (event.startsWith('Could not open codec')) {
+          SmartDialog.showToast('无法加载解码器, $event，可能会切换至软解');
+        } else if (!onlyPlayAudio.value) {
+          if (event.startsWith("error running") ||
+              event.startsWith("Failed to open .") ||
+              event.startsWith("Cannot open") ||
+              event.startsWith("Can not open")) {
+            return;
+          }
+          Utils.reportError(event);
+          // SmartDialog.showToast('视频加载错误, $event');
+        }
+      }),
+    ];
+  }
+
+  /// 移除事件监听
+  void _removeListeners() {
+    _stallWatchdog?.cancel();
+    _stallWatchdog = null;
+    if (Floating().onPipAction == _onPipAction) {
+      Floating().onPipAction = null;
+    }
+    _subscriptions?.forEach((e) => e.cancel());
+    _subscriptions?.clear();
+    _subscriptions = null;
+  }
+
+  /// 鸿蒙小窗控制面板按钮回调（floating 插件转发 controlPanelActionEvent）
+  void _onPipAction(String event, int? status) {
+    switch (event) {
+      case 'playbackStateChanged':
+        // status: 1=请求播放，0=请求暂停；缺省时按当前状态取反
+        final wantPlay = status == null ? !playerStatus.isPlaying : status == 1;
+        if (wantPlay) {
+          play();
+        } else {
+          pause();
+        }
+      case 'fastForward':
+        onForward(fastForBackwardDuration);
+      case 'fastBackward':
+        onBackward(fastForBackwardDuration);
+    }
+  }
+
+  /// 鸿蒙音频打断兜底检测（见 _stallWatchdog 字段注释）
+  void _startStallWatchdog() {
+    _stallWatchdog?.cancel();
+    _stallLastPosition = null;
+    _stallTicks = 0;
+    _stallWatchdog = Timer.periodic(const Duration(milliseconds: 1200), (_) {
+      if (!playerStatus.isPlaying ||
+          isBuffering.value ||
+          positionInMilliseconds == 0) {
+        _stallTicks = 0;
+        _stallLastPosition = null;
+        return;
+      }
+      if (positionInMilliseconds == _stallLastPosition) {
+        _stallTicks++;
+        // 连续约 2.4s 声称播放中却毫无进展：音频输出已被系统暂停。
+        // 同步为暂停态，让按钮显示"播放"，恢复逻辑见 play()。
+        if (_stallTicks >= 2) {
+          _stallTicks = 0;
+          _stallLastPosition = null;
+          _audioInterrupted = true;
+          pause(isInterrupt: true);
+        }
+      } else {
+        _stallTicks = 0;
+        _stallLastPosition = positionInMilliseconds;
+      }
+    });
+  }
+
+  void _cancelSubForSeek() {
+    if (_subForSeek != null) {
+      _subForSeek!.cancel();
+      _subForSeek = null;
+    }
+  }
+
+  Future<void> seek(Duration position, {bool isSeek = false}) async {
+    if (_playerCount == 0 || _videoPlayerController == null) return;
+    danmakuController?.clear();
+    // Arm before seek(): the seek command can produce a buffering event before
+    // the position stream reports the new target.
+    _beginRipperRestart();
+    try {
+      await _videoPlayerController?.seek(position);
+      _updateIOSPip(position);
+    } catch (e) {
+      // The seek did not start; do not leave stall detection disabled.
+      _clearRipperRestart();
+      if (kDebugMode) debugPrint('seek failed: $e');
+    }
+  }
+
+  /// 跳转至指定位置
+  Future<void> seekTo(Duration position, {bool isSeek = true}) async {
+    if (_playerCount == 0) {
+      return;
+    }
+    if (position < Duration.zero) {
+      position = Duration.zero;
+    }
+    _heartDuration = position.inSeconds;
+
+    if (duration.value != 0) {
+      seek(position, isSeek: isSeek);
+    } else {
+      // if (kDebugMode) debugPrint('seek duration else');
+      _subForSeek?.cancel();
+      _subForSeek = duration.listen((_) {
+        seek(position, isSeek: isSeek);
+        _cancelSubForSeek();
+      });
+    }
+  }
+
+  /// 设置倍速
+  Future<void> setPlaybackSpeed(double speed) async {
+    lastPlaybackSpeed = playbackSpeed;
+
+    if (speed == _videoPlayerController?.state.rate) return;
+
+    await _setRate(speed);
+    if (!isLive) _playbackSpeed.value = speed;
+    _updatePlaybackState();
+    if (danmakuController != null) {
+      try {
+        danmakuController?.updateOption(
+          danmakuController!.option.copyWith(
+            duration: DanmakuOptions.danmakuDuration / speed,
+            staticDuration: DanmakuOptions.danmakuStaticDuration / speed,
+          ),
+        );
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _setRate(double speed) async {
+    if (playerDisposed) return;
+    try {
+      await _videoPlayerController?.setRate(speed);
+    } catch (e) {
+      if (kDebugMode) debugPrint('setRate failed: $e');
+    }
+  }
+
+  /// 播放视频
+  Future<void> play({bool repeat = false, bool hideControls = true}) async {
+    if (_playerCount == 0) return;
+    _pauseRequestedByApp = false;
+    // 播放时自动隐藏控制条
+    controls = !hideControls;
+    // repeat为true，将从头播放
+    if (repeat) {
+      await seekTo(Duration.zero, isSeek: false);
+    }
+
+    // 鸿蒙：被系统打断后 mpv 的音频渲染器已被暂停且 mpv 自身无感知，
+    // 单纯解除暂停不会恢复。先重新激活音频会话抢回焦点（暂停其他 app 的
+    // 音频），再用 ao-reload 重建音频输出，让新渲染器以新焦点启动。
+    if (_audioInterrupted) {
+      _audioInterrupted = false;
+      try {
+        await audioSessionHandler?.setActive(true);
+      } catch (_) {}
+      try {
+        await _videoPlayerController?.platform?.maybeAsNativePlayer.command(
+          const ['ao-reload'],
+        );
+      } catch (_) {}
+    }
+
+    try {
+      await _videoPlayerController?.play();
+    } catch (e) {
+      // 播放器可能在 seek/音频重建的 await 期间被销毁
+      if (kDebugMode) debugPrint('play failed: $e');
+    }
+
+    audioSessionHandler?.setActive(true);
+
+    playerStatus = .playing;
+  }
+
+  /// 暂停播放
+  /// 应用层是否主动发起了当前这次暂停。用于区分"系统在进入画中画的退后台
+  /// 过程中直接把 mpv 置为暂停"（Dart 层无任何 pause 调用，需要自动恢复）
+  /// 与用户/业务发起的正常暂停。
+  bool _pauseRequestedByApp = false;
+  int _pipAutoResumeCount = 0;
+  DateTime? _pipAutoResumeWindowStart;
+
+  /// 生命周期回调的补偿入口：处于画中画且播放被系统静默暂停（而非应用
+  /// 主动暂停）时自动续播。覆盖"系统暂停发生在 isPipMode 置位之前"的
+  /// 时序——彼时 stream.playing 监听里的自动续播不满足条件，只能靠随后
+  /// 到达的生命周期事件（floating 插件会在 PiP 启动后补发 inactive）触发。
+  void autoResumeInPipIfNeeded() {
+    if (OS.isHarmony &&
+        !_pauseRequestedByApp &&
+        isPipMode &&
+        !playerStatus.isPlaying &&
+        !(videoPlayerController?.state.completed ?? false) &&
+        _pipAutoResumeAllowed()) {
+      play();
+    }
+  }
+
+  /// 限制画中画内自动续播的频率，防止与系统的强制暂停陷入拉锯。
+  bool _pipAutoResumeAllowed() {
+    final now = DateTime.now();
+    if (_pipAutoResumeWindowStart == null ||
+        now.difference(_pipAutoResumeWindowStart!) >
+            const Duration(seconds: 10)) {
+      _pipAutoResumeWindowStart = now;
+      _pipAutoResumeCount = 0;
+    }
+    return ++_pipAutoResumeCount <= 3;
+  }
+
+  Future<void> pause({bool notify = true, bool isInterrupt = false}) async {
+    _pauseRequestedByApp = true;
+    // 播放器可能在异步链路中被销毁（media_kit 会抛 [Player] has been disposed）
+    try {
+      await _videoPlayerController?.pause();
+    } catch (e) {
+      if (kDebugMode) debugPrint('pause failed: $e');
+    }
+    playerStatus = .paused;
+
+    // 主动暂停时让出音频焦点
+    if (!isInterrupt) {
+      audioSessionHandler?.setActive(false);
+    }
+  }
+
+  bool tripling = false;
+
+  /// 隐藏控制条
+  void hideTaskControls() {
+    _timer?.cancel();
+    _timer = Timer(showControlDuration, () {
+      if (!isSeeking.value && !tripling) {
+        controls = false;
+      }
+      _timer = null;
+    });
+  }
+
+  void onSeekStart(int seekFrom) {
+    seekPosition.value = seekFrom;
+    isSeeking.value = true;
+  }
+
+  void onSeekEnd() {
+    if (showSeekPreview) {
+      showPreview.value = false;
+    }
+    hasToasted = false;
+    isSeeking.value = false;
+    hideTaskControls();
+  }
+
+  final RxBool volumeIndicator = false.obs;
+  Timer? volumeTimer;
+  bool volumeInterceptEventStream = false;
+
+  final double maxVolume = PlatformUtils.isDesktop ? Pref.maxVolume : 1.0;
+  Future<void> setVolume(double volume, {bool showIndicator = true}) async {
+    try {
+      if (PlatformUtils.isDesktop) {
+        await _videoPlayerController!.setVolume(volume * 100);
+        actualVolume.value = volume;
+      } else {
+        FlutterVolumeController.updateShowSystemUI(false);
+        await FlutterVolumeController.setVolume(volume);
+        actualVolume.value =
+            await FlutterVolumeController.getVolume() ?? actualVolume.value;
+      }
+      this.volume.value = volume;
+    } catch (err) {
+      if (kDebugMode) debugPrint(err.toString());
+    }
+    if (showIndicator) {
+      volumeIndicator.value = true;
+    }
+    volumeInterceptEventStream = true;
+    volumeTimer?.cancel();
+    volumeTimer = Timer(const Duration(milliseconds: 200), () {
+      volumeIndicator.value = false;
+      volumeInterceptEventStream = false;
+      if (PlatformUtils.isDesktop) {
+        setting.put(SettingBoxKey.desktopVolume, volume.toPrecision(3));
+      }
+    });
+  }
+
+  /// Toggle Change the videofit accordingly
+  void toggleVideoFit(VideoFitType value) {
+    _prefFit = videoFit.value = value;
+    video.put(VideoBoxKey.cacheVideoFit, value.index);
+  }
+
+  /// 读取fit
+  var _prefFit = VideoFitType.values[Pref.cacheVideoFit];
+  void _initVideoFit() {
+    if (_prefFit == .fill && _isVertical) {
+      videoFit.value = .contain;
+    } else {
+      videoFit.value = _prefFit;
+    }
+  }
+
+  /// 设置后台播放
+  void setBackgroundPlay(bool val) {
+    videoPlayerServiceHandler?.enableBackgroundPlay = val;
+    if (!tempPlayerConf) {
+      setting.put(SettingBoxKey.enableBackgroundPlay, val);
+    }
+  }
+
+  set controls(bool visible) {
+    showControls.value = visible;
+    _timer?.cancel();
+    if (visible) {
+      hideTaskControls();
+    }
+  }
+
+  Timer? longPressTimer;
+
+  /// 长按倍速的上下界，避免自定义系数把速率放到 mpv 无法处理的区间
+  static const double _minLongPressSpeed = 0.25;
+  static const double _maxLongPressSpeed = 10.0;
+
+  /// 进入长按前的播放速度，松手后恢复到它
+  double? _longPressRestoreSpeed;
+
+  /// 「x 倍速中」提示所显示的速度。只在进入长按时写入，松手后保持不变，
+  /// 这样提示条 150ms 淡出期间不会闪回已恢复的原速。
+  late final RxDouble longPressDisplaySpeed = longPressSpeed.obs;
+
+  void cancelLongPressTimer() {
+    longPressTimer?.cancel();
+    longPressTimer = null;
+  }
+
+  /// 设置长按倍速状态 live模式下禁用
+  Future<void> setLongPressStatus(bool val) async {
+    if (isLive) {
+      return;
+    }
+    if (controlsLock.value) {
+      return;
+    }
+    if (longPressStatus.value == val) {
+      return;
+    }
+    if (val) {
+      if (playerStatus.isPlaying) {
+        _longPressRestoreSpeed = playbackSpeed;
+        final targetSpeed = enableAutoLongPressSpeed
+            ? (playbackSpeed * longPressSpeedFactor).clamp(
+                _minLongPressSpeed,
+                _maxLongPressSpeed,
+              )
+            : longPressSpeed;
+        longPressDisplaySpeed.value = targetSpeed;
+        longPressStatus.value = val;
+        HapticFeedback.lightImpact();
+        await setPlaybackSpeed(targetSpeed);
+      }
+    } else {
+      longPressStatus.value = val;
+      final restoreSpeed = _longPressRestoreSpeed ?? lastPlaybackSpeed;
+      _longPressRestoreSpeed = null;
+      await setPlaybackSpeed(restoreSpeed);
+    }
+  }
+
+  bool get isCompleted =>
+      videoPlayerController!.state.completed ||
+      durationInMilliseconds - positionInMilliseconds <= 50;
+
+  // 双击播放、暂停
+  Future<void> onDoubleTapCenter() async {
+    if (!isLive && isCompleted) {
+      await videoPlayerController!.seek(Duration.zero);
+      videoPlayerController!.play();
+    } else {
+      videoPlayerController!.playOrPause();
+    }
+  }
+
+  final RxBool mountSeekBackwardButton = false.obs;
+  final RxBool mountSeekForwardButton = false.obs;
+
+  void onDoubleTapSeekBackward() {
+    mountSeekBackwardButton.value = true;
+  }
+
+  void onDoubleTapSeekForward() {
+    mountSeekForwardButton.value = true;
+  }
+
+  void onForward(Duration duration) {
+    onForwardBackward(videoPlayerController!.state.position + duration);
+  }
+
+  void onBackward(Duration duration) {
+    onForwardBackward(videoPlayerController!.state.position - duration);
+  }
+
+  void multiBackwardStart([_]) {
+    isSeeking.value = true;
+    seekPosition.value = max(
+      0,
+      seekPosition.value - fastForBackwardInSeconds,
+    );
+  }
+
+  void multiBackwardEnd() {
+    if (isSeeking.value) {
+      isSeeking.value = false;
+      onForwardBackward(Duration(seconds: seekPosition.value));
+    } else {
+      onBackward(fastForBackwardDuration);
+    }
+  }
+
+  void onForwardBackward(Duration duration) {
+    seekTo(
+      duration.clamp(Duration.zero, videoPlayerController!.state.duration),
+      isSeek: false,
+    ).whenComplete(play);
+  }
+
+  void doubleTapFuc(DoubleTapType type) {
+    if (!enableQuickDouble) {
+      onDoubleTapCenter();
+      return;
+    }
+    switch (type) {
+      case DoubleTapType.left:
+        // 双击左边区域 👈
+        onDoubleTapSeekBackward();
+        break;
+      case DoubleTapType.center:
+        onDoubleTapCenter();
+        break;
+      case DoubleTapType.right:
+        // 双击右边区域 👈
+        onDoubleTapSeekForward();
+        break;
+    }
+  }
+
+  /// 关闭控制栏
+  void onLockControl(bool val) {
+    feedBack();
+    controlsLock.value = val;
+    if (!val && showControls.value) {
+      showControls.refresh();
+    }
+    controls = !val;
+  }
+
+  void _setFullScreen(bool val) {
+    isFullScreen.value = val;
+    updateSubtitleStyle();
+    if (!OS.isHarmony) return;
+
+    // 全屏状态同步给方向策略：它是「是否全屏」的唯一来源，路由叠加/回退时
+    // 也能据此恢复正确策略。
+    unawaited(OrientationPolicy.setFullScreen(val));
+    if (!val) {
+      HarmonyChannel.onLandscapeOrMiniWindowChange(false, null); // 非横屏
+    } else if (!isVertical) {
+      HarmonyChannel.onLandscapeOrMiniWindowChange(true, null); // 横屏
+    }
+  }
+
+  double screenRatio = 0.0;
+  bool isManualFS = true;
+
+  /// 最近一次退出全屏的时间。鸿蒙部分机型开启旋转锁定后，会被 childWhenDisabled 的窗口变
+  /// 横屏自动进全屏立即拉回，表现为退不出全屏。用该时间戳抑制退出后短暂窗口内的自动进全屏。
+  ///
+  /// 手动与自动退出一视同仁：窗口从横屏转回竖屏总有延迟，这段时间里窗口宽高比
+  /// 仍是横屏，不抑制就会被立刻拉回全屏。传感器驱动的进全屏（landscape 分支）
+  /// 不看这个时间戳，所以退出后立刻转回横屏依然能正常进全屏。
+  DateTime _lastFsExitAt = DateTime.fromMillisecondsSinceEpoch(0);
+  bool get suppressAutoFullScreen =>
+      DateTime.now().difference(_lastFsExitAt) <
+      const Duration(milliseconds: 600);
+  // 每次读取而不缓存：播放器是跨页面存活的单例，缓存会让在设置页改完
+  // 「默认全屏方向」后本次会话仍用旧值，表现为「改了没反应」。
+  // horizontalScreen 同理：鸿蒙上它由设备形态/内外屏自动判定，折叠切换后
+  // 必须读到新值，不能缓存。
+  FullScreenMode get mode => Pref.fullScreenMode;
+  bool get horizontalScreen => Pref.horizontalScreen;
+  late final removeSafeArea = Pref.removeSafeArea;
+
+  Future<void>? changeOrientation({
+    required bool isVertical,
+    DeviceOrientation? orientation,
+  }) {
+    // 鸿蒙的方向不在这里决策，见 OrientationPolicy（形态 + 页面 + 全屏）。
+    if (orientation == null && (mode == .none || mode == .gravity)) {
+      return null;
+    }
+    if (orientation == null &&
+        (mode == .vertical ||
+            (mode == .auto && isVertical) ||
+            (mode == .ratio && (isVertical || screenRatio < kScreenRatio)))) {
+      return portraitUpMode();
+    } else {
+      // https://github.com/flutter/flutter/issues/73651
+      // https://github.com/flutter/flutter/issues/183708
+      if (Platform.isAndroid || OS.isHarmony) {
+        if ((orientation ?? _orientation) == .landscapeRight) {
+          return landscapeRightMode();
+        } else {
+          return landscapeLeftMode();
+        }
+      } else {
+        if (orientation == .landscapeLeft) {
+          return landscapeLeftMode();
+        } else {
+          return landscapeRightMode();
+        }
+      }
+    }
+  }
+
+  // 全屏
+  bool _fsProcessing = false;
+  Future<void> triggerFullScreen({
+    bool status = true,
+    bool inAppFullScreen = false,
+    DeviceOrientation? orientation,
+    bool isManualFS = true,
+  }) async {
+    if (isDesktopPip) return;
+    if (isFullScreen.value == status) return;
+
+    if (_fsProcessing) return;
+    _fsProcessing = true;
+    // 任何一次真正的全屏切换都作废挂起的自动退出确认，避免刚切完又被延迟退出。
+    // 由 _scheduleAutoExitFullScreen 的回调调用时定时器已置空，这里是空操作。
+    _cancelAutoExitFs();
+    this.isManualFS = isManualFS;
+    try {
+      if (status) {
+        if (PlatformUtils.isMobile && !WindowFacts.isFreeWindowMode) {
+          hideSystemBar();
+          if (OS.isHarmony) {
+            // 鸿蒙：方向由 OrientationPolicy 唯一决策——手机竖屏播放形态下
+            // 横屏视频全屏临时转横屏（锁关时转回竖屏会跟回竖屏并自动退出
+            // 全屏），竖屏视频全屏保持竖向；其它形态保持跟随系统。
+            await OrientationPolicy.setFullScreen(true);
+            // 横屏视频等视口真正变横屏再置全屏布局，避免全屏先在竖屏/中间
+            // 尺寸渲染导致比例错误和动画跳变。
+            if (!WindowFacts.isWindowMode && !isVertical) {
+              await _waitForLandscapeViewport();
+            }
+          } else {
+            await changeOrientation(
+              isVertical: isVertical,
+              orientation: orientation,
+            );
+          }
+        } else {
+          await enterDesktopFullScreen(inAppFullScreen: inAppFullScreen);
+        }
+      } else {
+        if (PlatformUtils.isMobile && !WindowFacts.isFreeWindowMode) {
+          if (!removeSafeArea) {
+            showSystemBar();
+          }
+          if (OS.isHarmony) {
+            // 退出全屏时人仍在播放页：把「是否全屏」置 false，策略重算为
+            // userPortrait（USER_ROTATION_PORTRAIT）——向系统发一次「临时
+            // 转回竖屏」，让窗口回到竖屏非全屏，避免保持横屏后被自动进全屏
+            // 重新拉回；之后恢复跟随传感器。portraitOnly 由离开播放页的
+            // 路由事件触发。
+            _lastFsExitAt = DateTime.now();
+            await OrientationPolicy.setFullScreen(false);
+            // 退出全屏会向系统发一次「临时转回竖屏」：等窗口真正变成竖屏再切
+            // 非全屏布局，否则旋转过程中会先闪一帧横屏非全屏布局。
+            if (!WindowFacts.isWindowMode &&
+                OrientationPolicy.isTemporaryPortrait) {
+              await _waitForPortraitViewport();
+            }
+          } else {
+            if (orientation == null && mode == .none) {
+              return;
+            }
+            _lastFsExitAt = DateTime.now();
+            // 鸿蒙mate80开启旋转锁定时，原生setPreferredOrientation可能长时间
+            // 不返回。加超时保证退出
+            await resetScreenRotation()?.timeout(
+              const Duration(milliseconds: 500),
+              onTimeout: () {},
+            );
+          }
+        } else {
+          await exitDesktopFullScreen();
+        }
+      }
+    } finally {
+      _setFullScreen(status);
+      _fsProcessing = false;
+    }
+  }
+
+  /// 输出（渲染路径或 HDR 参数，见 [_appliedOutput]）变化时按当前输出重建
+  /// 播放器，保留进度、播放状态与倍速。
+  /// 只由 [_playerQueue] 调用，失败向上抛，由它记下待重试。
+  Future<void> _rebuildForRenderPath() async {
+    // 上一次重建失败后，重试可能落在页面已经销毁之后
+    if (_playerCount == 0) return;
+    final wasPlaying = playerStatus.isPlaying;
+    // 不能只信 state.position：open() 会把它清零，重建恰好落在「新播放器
+    // 刚建好、mpv 还没上报 time-pos」的窗口里时读到的就是 0，一重建就从头播，
+    // 还会把 0 当成观看进度写回历史。position（秒）由监听器维护，可以兜底。
+    final live = positionInMilliseconds;
+    final pos = live > 0
+        ? Duration(milliseconds: live)
+        : Duration(seconds: position.value);
+    await _createVideoController(dataSource, pos, null, isRebuild: true);
+    if (_videoPlayerController == null) return;
+    // 重建出来的是一个全新的 Player，倍速回到了默认值 1.0，而 UI 上的
+    // _playbackSpeed 没变——不重新应用就会「显示 2.0x，实际 1.0x」。
+    // 注意不要直接调 _initializePlayer()：它带 _autoPlay 分支，会把用户
+    // 手动暂停的视频重新播起来。
+    if (!isLive && _videoPlayerController!.state.rate != _playbackSpeed.value) {
+      await setPlaybackSpeed(_playbackSpeed.value);
+    }
+    if (wasPlaying) {
+      await play();
+    }
+    // 到这里新播放器已经 open 完毕，页面才能安全地重挂字幕轨、
+    // SponsorBlock 这些绑在 Player 上的东西。见 [playerRebuilt]。
+    playerRebuilt.value++;
+  }
+
+  void _onRenderPathRebuildFailed(Object error, StackTrace stackTrace) {
+    if (kDebugMode) {
+      debugPrint(stackTrace.toString());
+      debugPrint('_rebuildForRenderPath failed: $error');
+    }
+    // 旧播放器多半已经 dispose，画面是黑的；切换清晰度会重建播放器并重试。
+    SmartDialog.showToast('切换播放画面失败，切换清晰度可重试');
+  }
+
+  /// 等待平台视口真正旋转到目标方向（按引擎上报的物理尺寸判断），带超时
+  /// 兜底。旋转动画期间先保持当前布局，避免先渲染一帧方向不匹配的布局造成
+  /// 闪烁。
+  Future<void> _waitForViewport({
+    required bool landscape,
+    Duration timeout = const Duration(milliseconds: 600),
+  }) async {
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    if (views.isEmpty) return;
+    final view = views.first;
+    final stopwatch = Stopwatch()..start();
+    while (stopwatch.elapsedMilliseconds < timeout.inMilliseconds) {
+      final size = view.physicalSize;
+      if ((size.width > size.height) == landscape) return;
+      await Future<void>.delayed(const Duration(milliseconds: 16));
+    }
+  }
+
+  /// 等待平台视口旋转为横屏（宽>高），带超时兜底。
+  Future<void> _waitForLandscapeViewport({
+    Duration timeout = const Duration(milliseconds: 600),
+  }) => _waitForViewport(landscape: true, timeout: timeout);
+
+  /// 等待平台视口旋转为竖屏（高≥宽），带超时兜底。
+  Future<void> _waitForPortraitViewport({
+    Duration timeout = const Duration(milliseconds: 600),
+  }) => _waitForViewport(landscape: false, timeout: timeout);
+
+  void addPositionListener(ValueChanged<Duration> listener) {
+    if (_playerCount == 0) return;
+    _positionListeners.add(listener);
+  }
+
+  void removePositionListener(ValueChanged<Duration> listener) =>
+      _positionListeners.remove(listener);
+
+  void addStatusLister(ValueChanged<PlayerStatus> listener) {
+    if (_playerCount == 0) return;
+    _statusListeners.add(listener);
+  }
+
+  void removeStatusLister(ValueChanged<PlayerStatus> listener) =>
+      _statusListeners.remove(listener);
+
+  // 记录播放记录
+  Future<void>? makeHeartBeat(
+    int progress, {
+    HeartBeatType type = .playing,
+    bool isManual = false,
+    dynamic aid,
+    dynamic bvid,
+    dynamic cid,
+    dynamic epid,
+    dynamic seasonId,
+    dynamic pgcType,
+    VideoType? videoType,
+  }) {
+    if (isLive ||
+        !enableHeart ||
+        progress == 0 ||
+        (playerStatus.isPaused && !isManual)) {
+      return null;
+    }
+
+    Future<void> send() {
+      return VideoHttp.heartBeat(
+        aid: aid ?? _aid,
+        bvid: bvid ?? _bvid,
+        cid: cid ?? this.cid,
+        progress: progress,
+        epid: epid ?? _epid,
+        seasonId: seasonId ?? _seasonId,
+        subType: pgcType ?? _pgcType,
+        videoType: videoType ?? _videoType,
+      );
+    }
+
+    switch (type) {
+      case .playing:
+        if (progress - _heartDuration >= 5) {
+          _heartDuration = progress;
+          return send();
+        }
+      case .status:
+        if (progress - _heartDuration >= 2) {
+          _heartDuration = progress;
+          return send();
+        }
+      case .completed:
+        if (playerStatus.isCompleted &&
+            (durationInMilliseconds - positionInMilliseconds) <= 1000) {
+          progress = -1;
+        }
+        return send();
+    }
+    return null;
+  }
+
+  void setPlayRepeat(PlayRepeat type) {
+    playRepeat = type;
+    final handler = videoPlayerServiceHandler;
+    handler?.updateRepeatMode(type);
+    // 视频页循环模式也支持从播控中心/实况窗切换
+    handler?.onRepeatModeChanged = (repeat) async {
+      setPlayRepeat(repeat);
+    };
+    if (!tempPlayerConf) video.put(VideoBoxKey.playRepeat, type.index);
+  }
+
+  void putSubtitleSettings() {
+    setting.putAllNE({
+      SettingBoxKey.subtitleFontScale: subtitleFontScale,
+      SettingBoxKey.subtitleFontScaleFS: subtitleFontScaleFS,
+      SettingBoxKey.subtitlePaddingH: subtitlePaddingH,
+      SettingBoxKey.subtitlePaddingB: subtitlePaddingB,
+      SettingBoxKey.subtitleBgOpacity: subtitleBgOpacity,
+      SettingBoxKey.subtitleStrokeWidth: subtitleStrokeWidth,
+      SettingBoxKey.subtitleFontWeight: subtitleFontWeight,
+    });
+  }
+
+  // isCloseAll 由外部页面直接置位（新 ohos 提交的写法），故为公开字段
+  bool isCloseAll = false;
+
+  /// 播放器销毁时恢复方向。
+  ///
+  /// 鸿蒙上方向策略由 `OrientationPolicy` 统一决策（形态 + 页面 + 全屏）：
+  /// 离开播放页由路由观察器把策略切到该页面应有的值，销毁时不再单独设方向，
+  /// 避免两处写策略互相覆盖。
+  Future<void>? resetScreenRotation() {
+    if (OS.isHarmony) {
+      return null;
+    }
+    if (horizontalScreen) {
+      return fullMode();
+    }
+    return portraitUpMode();
+  }
+
+  void onCloseAll() {
+    isCloseAll = true;
+    if (PlatformUtils.isDesktop) {
+      exitDesktopFullScreen();
+    } else {
+      //规避鸿蒙悬浮窗全屏下，返回主页，方向不更新
+      triggerFullScreen(status: false);
+    }
+    // dispose 已改为异步（退后台清内存），这里不阻塞路由返回
+    unawaited(dispose());
+    Get.until((route) => route.isFirst);
+  }
+
+  Future<void> dispose() async {
+    // 每次减1，最后销毁
+    resetScreenRotation();
+    cancelLongPressTimer();
+    _cancelSubForSeek();
+    if (!isCloseAll && _playerCount > 1) {
+      _playerCount -= 1;
+      _heartDuration = 0;
+      return;
+    }
+
+    _playerCount = 0;
+    // BTR-BEGIN
+    // Only the last player page owns the session; a stacked player page must
+    // not stop the download of the one still playing.
+    _ripperSessionId = 0;
+    _resetRipperFeedbackForSource();
+    await RipperPlayerBridge.instance.close();
+    // BTR-END
+    if (removeSafeArea) {
+      showSystemBar();
+    }
+    danmakuController = null;
+    _stopOrientationListener();
+    _disableAutoEnterPip();
+    setPlayCallBack(null);
+    dmState.clear();
+    if (showSeekPreview) {
+      _clearPreview();
+    }
+    if (Platform.isAndroid) {
+      AndroidHelper$ToDart.onUserLeaveHint = null;
+    } else if (Platform.isIOS) {
+      IOSPipHelper.dispose();
+    }
+    _timer?.cancel();
+    // _position.close();
+    // _playerEventSubs?.cancel();
+    // _sliderPosition.close();
+    // _sliderTempPosition.close();
+    // _isSliderMoving.close();
+    // _duration.close();
+    // _buffered.close();
+    // _showControls.close();
+    // _controlsLock.close();
+
+    // playerStatus.close();
+    // dataStatus.close();
+
+    if (PlatformUtils.isDesktop && isAlwaysOnTop.value) {
+      windowManager.setAlwaysOnTop(false);
+    }
+
+    _removeListeners();
+    _positionListeners.clear();
+    _statusListeners.clear();
+    _stopWakeLockTimer();
+    WakelockPlus.disable();
+    if (kDebugMode) {
+      debugPrint('dispose player');
+    }
+    // 正在创建数据源/VideoController 或重建渲染路径时先等它收尾
+    final pending = _playerQueue.tail;
+    if (pending != null) {
+      try {
+        await pending.timeout(const Duration(seconds: 3));
+      } on TimeoutException {
+        debugPrint(
+          '[PlPlayer] dispose: pending task still running after 3s, forcing teardown',
+        );
+      }
+    }
+    await _disposePlayerSafely(_videoPlayerController);
+    _videoPlayerController = null;
+    _videoControllerNotifier.value = null;
+    _instance = null;
+    videoPlayerServiceHandler?.clear();
+    HarmonyChannel.releaseContinuation(this);
+  }
+
+  /// 销毁底层 Player。
+  ///
+  /// 不再预留固定延迟：media_kit 的销毁已是同步握手（`Initializer.dispose` 等
+  /// isolate 确认退出后再 `mpv_terminate_destroy`），控制器的在途回调由
+  /// `Player.platform.release` 在 `Player.dispose()` 内部收尾。
+  Future<void> _disposePlayerSafely(Player? player) async {
+    if (player == null) return;
+    await player.dispose();
+  }
+
+  static Future<void> updatePlayCount() async {
+    if (_instance?._playerCount == 1) {
+      await _instance?.dispose();
+    } else {
+      _instance?._playerCount -= 1;
+    }
+  }
+
+  void setContinuePlayInBackground() {
+    continuePlayInBackground.value = !continuePlayInBackground.value;
+    if (!tempPlayerConf) {
+      setting.put(
+        SettingBoxKey.continuePlayInBackground,
+        continuePlayInBackground.value,
+      );
+    }
+  }
+
+  void setOnlyPlayAudio() {
+    onlyPlayAudio.value = !onlyPlayAudio.value;
+    videoPlayerController?.setVideoTrack(
+      onlyPlayAudio.value ? VideoTrack.no() : VideoTrack.auto(),
+    );
+  }
+
+  /// 进度条预览缩略图缓存，每个 value 都是一张 GPU 纹理。
+  ///
+  /// Flutter 的 `ImageCache`（含内存压力回调）不会管这个自建 map，所以必须自己
+  /// 设上限，否则拖拽进度条会把整段视频的缩略图一直留住。按数量做 LRU 淘汰
+  /// （缩略图尺寸小而均匀），淘汰时显式 dispose。
+  static const int _kPreviewCacheLimit = 40;
+
+  late final Map<String, ui.Image?> previewCache = {};
+  final List<String> _previewCacheOrder = [];
+
+  /// 写入缩略图并维持 LRU 上限。由 VideoShotImage 取图成功后调用。
+  void cachePreviewImage(String key, ui.Image image) {
+    final old = previewCache[key];
+    if (old != null && !identical(old, image)) old.dispose();
+    previewCache[key] = image;
+
+    _previewCacheOrder
+      ..remove(key)
+      ..add(key);
+
+    while (_previewCacheOrder.length > _kPreviewCacheLimit) {
+      final evicted = _previewCacheOrder.removeAt(0);
+      previewCache.remove(evicted)?.dispose();
+    }
+
+    // 加载中的占位项（value 为 null）不进 LRU 队列，顺带清理，避免 key 无界增长。
+    if (previewCache.length > _kPreviewCacheLimit * 2) {
+      final tracked = _previewCacheOrder.toSet();
+      previewCache.removeWhere((k, v) => v == null && !tracked.contains(k));
+    }
+  }
+
+  /// 命中时刷新 LRU 顺序。
+  void touchPreviewImage(String key) {
+    if (_previewCacheOrder.remove(key)) _previewCacheOrder.add(key);
+  }
+
+  LoadingState<VideoShotData>? videoShot;
+  // 悬浮进度条预览的横坐标（-1/未悬浮时为 null）
+  double? hoverDx;
+  late final RxBool showPreview = false.obs;
+  late final showSeekPreview = Pref.showSeekPreview;
+  late final previewIndex = RxnInt();
+
+  void updatePreviewIndex(int seconds) {
+    if (videoShot == null) {
+      videoShot = LoadingState.loading();
+      getVideoShot();
+      return;
+    }
+    if (videoShot case Success(:final response)) {
+      showPreview.value = true;
+      final index = max(
+        0,
+        (response.index.where((item) => item <= seconds).length - 2),
+      );
+      if (previewIndex.value != index) {
+        previewIndex.value = index;
+      } else if (hoverDx != null) {
+        previewIndex.refresh();
+      }
+    }
+  }
+
+  void hidePreviewIfNeeded() {
+    if (showSeekPreview) {
+      hidePreview();
+    }
+  }
+
+  void hidePreview() {
+    hoverDx = null;
+    showPreview.value = false;
+  }
+
+  void _clearPreview() {
+    hidePreview();
+    previewIndex.value = null;
+    videoShot = null;
+    final seen = <ui.Image>{};
+    for (final i in previewCache.values) {
+      // 同一张图可能被多个 key 引用，重复 dispose 会触发
+      // "Cannot dispose image twice"，按对象身份去重。
+      if (i != null && seen.add(i)) i.dispose();
+    }
+    previewCache.clear();
+    _previewCacheOrder.clear();
+  }
+
+  Future<void> getVideoShot() async {
+    videoShot = await VideoHttp.videoshot(bvid: bvid, cid: cid!);
+  }
+
+  int _screenshotState = 0;
+  Future<void> takeScreenshot() async {
+    if (_screenshotState > 0) return;
+    _screenshotState = 1;
+    try {
+      SmartDialog.showToast('截图中');
+      // 鸿蒙 media_kit fork 的 screenshot 返回 Uint8List（上游 fork 返回 ui.Image）
+      final bytes = await videoPlayerController?.screenshot(
+        format: 'image/png',
+      );
+      if (bytes == null) {
+        SmartDialog.showToast('截图失败');
+        return;
+      }
+      final time = DurationUtils.formatDuration(
+        positionInMilliseconds / 1000,
+      ).replaceAll(':', '-');
+      SmartDialog.showToast('点击弹窗或按 Enter 保存截图');
+      await showDialog(
+        context: Get.context!,
+        requestFocus: true,
+        builder: (context) {
+          void save() {
+            if (_screenshotState > 1) return;
+            _screenshotState = 2;
+            Get.back();
+            ImageUtils.saveByteImg(
+              bytes: bytes,
+              fileName: 'screenshot_${cid}_$time',
+            );
+          }
+
+          return Focus(
+            autofocus: true,
+            onKeyEvent: (node, event) {
+              if (event is KeyDownEvent) {
+                final key = event.logicalKey;
+                if (key == .keyS || key == .enter || key == .numpadEnter) {
+                  save();
+                  return .handled;
+                }
+              }
+              return .ignored;
+            },
+            child: GestureDetector(
+              onTap: save,
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxWidth: min(MediaQuery.widthOf(context) / 3, 350),
+                    ),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        border: Border.all(
+                          width: 5,
+                          color: ColorScheme.of(context).surface,
+                        ),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(5),
+                        child: Image.memory(bytes),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    } catch (e, s) {
+      debugPrint('[takeScreenshot] failed: $e\n$s');
+      SmartDialog.showToast('截图失败');
+    } finally {
+      // 中途任何异常都必须复位，否则此后所有截图都会被开头的守卫静默丢弃。
+      _screenshotState = 0;
+    }
+  }
+
+  void onPopInvokedWithResult(bool didPop, Object? result) {
+    if (didPop) {
+      if (playerStatus.isPlaying) {
+        pause();
+      }
+
+      setPlayCallBack(null);
+
+      if ((Platform.isAndroid || OS.isHarmony) && _playerCount <= 1) {
+        _disableAutoEnterPip();
+        if (!setSystemBrightness) {
+          ScreenBrightnessPlatform.instance.resetApplicationScreenBrightness();
+        }
+      }
+
+      return;
+    }
+
+    if (controlsLock.value) {
+      onLockControl(false);
+      return;
+    }
+    if (isDesktopPip) {
+      exitDesktopPip();
+      return;
+    }
+    if (isFullScreen.value) {
+      triggerFullScreen(status: false);
+      return;
+    }
+    Get.back();
+  }
+}

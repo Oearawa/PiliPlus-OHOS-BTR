@@ -1,0 +1,50 @@
+{
+  app: {
+    signingConfigs: [],
+    products: [
+      {
+        name: "default",
+        signingConfig: "default",
+        compatibleSdkVersion: "6.0.2(22)",
+        runtimeOS: "HarmonyOS",
+        targetSdkVersion: "26.0.0",
+        buildOption: {
+          packOptions: {
+            enableIncrementalSoCompress: true,
+            fastBuildApp: true
+          },
+          "nativeCompiler": "BiSheng",
+          "preloadSystemSo": true,
+          "arkOptions": {
+            "autoLazyImport": true,
+          }
+        }
+      },
+    ],
+    buildModeSet: [
+      {
+        name: "debug",
+      },
+      {
+        name: "profile",
+      },
+      {
+        name: "release",
+      },
+    ],
+  },
+  modules: [
+    {
+      name: "entry",
+      srcPath: "./entry",
+      targets: [
+        {
+          name: "default",
+          applyToProducts: [
+            "default"
+          ],
+        },
+      ],
+    },
+  ],
+}

@@ -1,0 +1,72 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "module description"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "description"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "PiliPro"
+    },
+    {
+      "name": "write_imagevideo_reason",
+      "value": "Allow saving images/videos to gallery."
+    },
+    {
+      "name": "no_matter",
+      "value": "no matter"
+    },
+    {
+      "name": "shortcut_search",
+      "value": "Search"
+    },
+    {
+      "name": "shortcut_offline",
+      "value": "Offline cache"
+    },
+    {
+      "name": "shortcut_history",
+      "value": "History"
+    },
+    {
+      "name": "shortcut_favorite",
+      "value": "Favorites"
+    },
+    {
+      "name": "EntryFormAbility_label",
+      "value": "UP card"
+    },
+    {
+      "name": "EntryFormAbility_desc",
+      "value": "UP card"
+    },
+    {
+      "name": "up_card_name",
+      "value": "UP card"
+    },
+    {
+      "name": "up_card_desc",
+      "value": "Show UP avatar and name, tap to open their page"
+    },
+    {
+      "name": "up_card_mini_name",
+      "value": "UP mini card"
+    },
+    {
+      "name": "up_card_mini_desc",
+      "value": "Minimal UP avatar and name card"
+    },
+    {
+      "name": "up_card_24_name",
+      "value": "UP 2x4 card"
+    },
+    {
+      "name": "up_card_24_desc",
+      "value": "Recent uploads with covers on space header background"
+    }
+  ]
+}

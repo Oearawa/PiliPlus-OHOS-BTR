@@ -1,0 +1,96 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "module description"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "description"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "PiliPro"
+    },
+    {
+      "name": "perm_get_network_info_reason",
+      "value": "用于获取当前网络状态，保障视频、弹幕等内容正常加载。"
+    },
+    {
+      "name": "perm_get_wifi_info_reason",
+      "value": "用于读取 Wi‑Fi 连接信息，优化视频播放的网络选择。"
+    },
+    {
+      "name": "write_imagevideo_reason",
+      "value": "用于读取写入图片"
+    },
+    {
+      "name": "read_imagevideo_reason",
+      "value": "用于读取相册图片"
+    },
+    {
+      "name": "keep_background_running_reason",
+      "value": "用于在后台继续播放音频及下载视频"
+    },
+    {
+      "name": "read_pasteboard_reason",
+      "value": "用于读取剪贴板内容。"
+    },
+    {
+      "name": "gesture_reason",
+      "value": "智感握姿需要根据握持手势调整界面布局"
+    },
+    {
+      "name": "no_matter",
+      "value": "no matter"
+    },
+    {
+      "name": "shortcut_search",
+      "value": "Search"
+    },
+    {
+      "name": "shortcut_offline",
+      "value": "Offline cache"
+    },
+    {
+      "name": "shortcut_history",
+      "value": "History"
+    },
+    {
+      "name": "shortcut_favorite",
+      "value": "Favorites"
+    },
+    {
+      "name": "EntryFormAbility_label",
+      "value": "UP card"
+    },
+    {
+      "name": "EntryFormAbility_desc",
+      "value": "UP card"
+    },
+    {
+      "name": "up_card_name",
+      "value": "UP card"
+    },
+    {
+      "name": "up_card_desc",
+      "value": "Show UP avatar and name, tap to open their page"
+    },
+    {
+      "name": "up_card_mini_name",
+      "value": "UP mini card"
+    },
+    {
+      "name": "up_card_mini_desc",
+      "value": "Minimal UP avatar and name card"
+    },
+    {
+      "name": "up_card_24_name",
+      "value": "UP 2x4 card"
+    },
+    {
+      "name": "up_card_24_desc",
+      "value": "Recent uploads with covers on space header background"
+    }
+  ]
+}

@@ -1,0 +1,527 @@
+name: PiliPlus
+description: PiliPro - HarmonyOS NEXT third-party Bilibili client with multi-threaded streaming acceleration.
+# The following line prevents the package from being accidentally published to
+# pub.dev using `flutter pub publish`. This is preferred for private packages.
+publish_to: "none" # Remove this line if you wish to publish to pub.dev
+
+# The following defines the version and build number for your application.
+# A version number is three numbers separated by dots, like 1.2.43
+# followed by an optional build number separated by a +.
+# Both the version and the builder number may be overridden in flutter
+# build by specifying --build-name and --build-number, respectively.
+# In Android, build-name is used as versionName while build-number used as versionCode.
+# Read more about Android versioning at https://developer.android.com/studio/publish/versioning
+# In iOS, build-name is used as CFBundleShortVersionString while build-number is used as CFBundleVersion.
+# Read more about iOS versioning at
+# https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
+# In Windows, build-name is used as the major, minor, and patch parts
+# of the product and file versions while build-number is used as the build suffix.
+# update when release
+version: 2.2.1+6604
+
+environment:
+  sdk: ">=3.12.2"
+  flutter: ">=3.44.9" # match installed OHOS SDK
+
+# Dependencies specify other packages that your package needs in order to work.
+# To automatically upgrade your package dependencies to the latest versions
+# consider running `flutter pub upgrade --major-versions`. Alternatively,
+# dependencies can be manually updated by changing the version numbers below to
+# the latest version available on pub.dev. To see which dependencies have newer
+# versions available, run `flutter pub outdated`.
+dependencies:
+  os_type: ^0.2.2
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # Flutter 3.47 起 Material/Cupertino 被拆成独立 pub 包，上上游已全量迁移。
+  # 鸿蒙 fork 仍在 3.41，这里用仓库内的本地 shim 把这两个包名映射回 SDK 内置
+  # 实现，从而可以原样接受上游的 import 写法（详见 packages/*/pubspec.yaml）。
+  # 鸿蒙升到 3.47 后改回 `^1.0.0` 并删掉 packages/ 下两个目录即可。
+  material_ui:
+    path: packages/material_ui
+  cupertino_ui:
+    path: packages/cupertino_ui
+  # The following adds the Cupertino Icons font to your application.
+  # Use with the CupertinoIcons class for iOS style icons.
+  cupertino_icons: ^1.0.9
+  # 动态取色
+  dynamic_color: ^2.1.0	
+
+  # get: ^4.7.2
+  get:
+    git:
+      url: https://github.com/bggRGjQaUbCoE/getx.git
+      ref: dev
+
+  # 网络
+  dio: 5.9.2
+  cookie_jar: ^4.0.9
+  connectivity_plus: ^7.1.1
+  connectivity_plus_ohos: 
+    git:
+      url: https://github.com/HelloZeroNick/connectivity_plus_ohos.git
+      ref: main
+  dio_http2_adapter: ^2.7.1
+
+  # 图片
+  # extended_image: ^9.0.7
+  saver_gallery: ^4.1.2 # 已适配鸿蒙
+
+  # QRCode
+  # qr_flutter: ^4.1.0
+  pretty_qr_code: ^3.6.0
+
+  # 存储
+  path_provider: ^2.1.5
+  hive_ce: ^2.19.3
+
+  # 设备信息
+  device_info_plus: ^10.1.0
+  # 权限
+  # permission_handler: ^12.0.0+1
+  permission_handler_apple: ^9.4.10
+  permission_handler_android: ^13.0.1
+  permission_handler_platform_interface: ^4.3.0
+  permission_handler_ohos: ^0.0.8
+  # 分享
+  share_plus: ^10.1.1
+  # cookie 管理
+  # webview_cookie_manager: ^2.0.6
+  # 浏览器
+  # webview_flutter: ^4.10.0
+  flutter_inappwebview: ^6.1.5
+  flutter_inappwebview_windows: ^0.6.0
+  extended_nested_scroll_view:
+    git:
+      url: https://github.com/bggRGjQaUbCoE/extended_nested_scroll_view.git
+      ref: dev
+  # 上拉加载
+  # loading_more_list: ^7.1.0
+  # 下拉刷新
+  # pull_to_refresh_notification: ^3.1.0
+  # 图标
+  font_awesome_flutter:
+    git:
+      url: https://github.com/bggRGjQaUbCoE/font_awesome_flutter.git
+      ref: v10.9.0
+  # material_design_icons_flutter: ^7.0.7296
+  material_design_icons_flutter:
+    git:
+      url: https://github.com/bggRGjQaUbCoE/material_design_icons_flutter.git
+      ref: const
+  # toast
+  flutter_smart_dialog:
+    git:
+      url: https://github.com/bggRGjQaUbCoE/flutter_smart_dialog.git
+      ref: main
+  # 下滑关闭
+  # dismissible_page: ^1.0.2
+  # custom_sliding_segmented_control: ^1.8.4
+  # 加密
+  crypto: ^3.0.7
+  encrypt: ^5.0.3
+
+  # 视频播放器
+  media_kit: # overridden
+  media_kit_video:
+    git:
+      url: https://github.com/HelloZeroNick/media-kit.git
+      ref: feat-simple-video
+      path: ./media_kit_video
+  media_kit_libs_video:
+    git:
+      url: https://github.com/HelloZeroNick/media-kit.git
+      ref: feat-simple-video
+      path: ./libs/universal/media_kit_libs_video
+
+  # 媒体通知
+  # audio_service: ^0.18.15
+  audio_service:
+    git:
+      url: https://gitcode.com/CPF-Flutter/fluttertpc_audio_service.git
+      path: audio_service
+      ref: br_v0.18.18_ohos
+  # audio_session: ^0.2.2
+  audio_session:
+    git:
+      url: https://gitcode.com/CPF-Flutter/flutter_audio_session.git
+      ref: br_v0.2.2_ohos
+
+  # 音量、亮度、屏幕控制
+  flutter_volume_controller: ^2.0.2 # 已支持鸿蒙
+  wakelock_plus: 1.3.3
+  wakelock_plus_ohos: ^0.0.3
+  # 设备方向检测
+  # fork版本 1.添加平放识别 fix https://atomgit.com/CPF-Flutter/fluttertpc_native_device_orientation/issues/17
+  # 2.添加自动旋转检测，对齐上游安卓行为
+  native_device_orientation:
+    git:
+      url: https://gitcode.com/hellozeronick/fluttertpc_native_device_orientation.git
+      ref: br_2.1.0_ohos
+  protobuf: ^6.0.0
+  # animations: ^2.0.11
+
+  url_launcher: ^6.3.1
+  # 防抖节流
+  easy_debounce: ^2.0.3
+  # 高帧率
+  flutter_displaymode: ^0.7.0
+  # scheme跳转
+  app_links: ^6.4.1
+  app_links_ohos: ^0.2.0
+  # 弹幕
+  # ns_danmaku:
+  #   git:
+  #     url: https://github.com/bggRGjQaUbCoE/flutter_ns_danmaku.git
+  #     ref: master
+  canvas_danmaku:
+    git:
+      url: https://github.com/Starfallan/canvas_danmaku.git
+      ref: main
+  # 状态栏图标控制
+  # status_bar_control: ^3.2.1
+  # 代理
+  # system_proxy: ^0.1.0
+  # pip
+  # floating: ^3.0.0
+  floating:
+    git:
+      url: https://github.com/qinshah/floating.git
+      ref: 3eefccb759c4ea8114e722f1511fe1dbce70dc9f
+
+    # html解析
+  html: 0.15.6
+  # html渲染
+  flutter_html: ^3.0.0
+  # 极验
+  gt3_flutter_plugin: ^0.1.1
+  uuid: ^4.5.3
+  # scrollable_positioned_list: ^0.3.8
+  # nil: ^1.1.1
+  catcher_2:
+    git:
+      url: https://github.com/HelloZeroNick/catcher_2.git
+      ref: dev
+  logger: ^2.7.0
+  #瀑布流（上游 2.1.6 起由 waterfall_flow 换成 flutter_staggered_grid_view）
+  flutter_staggered_grid_view: ^0.7.0
+  #跑马灯
+  # marquee: ^2.3.0
+  #富文本
+  # extended_text: ^14.1.0
+  # chat_bottom_container: ^0.2.0
+  chat_bottom_container:
+    git:
+      url: https://github.com/qinshah/flutter_chat_packages.git
+      ref: dba2bf10db4a6f89564d9be63ce17b18f0f7e3e5
+      path: packages/chat_bottom_container
+  image_picker: ^1.1.2
+  intl: ^0.20.2
+  archive: ^4.0.9
+  flutter_svg: ^2.3.0
+  image_cropper: ^12.0.0
+  #解压直播消息
+  brotli: ^0.6.0
+  expandable: ^5.0.1
+  flex_seed_scheme: ^4.0.1
+  live_photo_maker:
+    git:
+      url: https://gitcode.com/hxa-flutter/live_photo_maker.git
+      ref: main
+  fl_chart: ^1.0.0
+  synchronized: ^3.4.0+1
+  # document_file_save_plus: ^2.0.0
+  # webdav_client: ^1.2.2
+  webdav_client:
+    git:
+      url: https://github.com/wgh136/webdav_client.git
+      ref: main
+  re_highlight: ^0.0.3
+  flutter_sortable_wrap:
+    git:
+      url: https://github.com/bggRGjQaUbCoE/flutter_sortable_wrap.git
+      ref: master
+  web_socket_channel: ^3.0.3
+  # image: ^4.7.1
+  # window_manager: ^0.5.1
+  win32: ^6.3.0
+  # FontUtils 枚举 Windows / Linux 系统字体用（上游 4ca037345 引入）
+  ffi: ^2.2.0
+  window_manager:
+    git:
+      url: https://github.com/bggRGjQaUbCoE/window_manager.git
+      path: packages/window_manager
+      ref: main
+  # 上游 2.1.6 升级到 tray_manager ^0.8.0（要求 Dart ^3.13 / Flutter >=3.47），
+  # 鸿蒙 SDK 为 Dart 3.12.2 / Flutter 3.44.9，暂留 0.5.x 及旧 TrayListener 写法
+  tray_manager: ^0.5.3
+  # file_picker: ^10.3.3
+  file_picker:
+    path: packages/file_picker
+  super_sliver_list:
+    git:
+      url: https://github.com/bggRGjQaUbCoE/super_sliver_list.git
+      ref: mod
+  dlna_dart: ^0.1.1
+  battery_plus:
+    git:
+      url: https://gitcode.com/CPF-Flutter/flutter_plus_plugins.git
+      path: packages/battery_plus/battery_plus
+      ref: br_battery_plus-v7.0.0_ohos
+  material_new_shapes: ^1.0.0
+
+  vector_math: any
+  fixnum: any
+  json_annotation: any
+  stream_transform: any
+  screen_brightness: ^2.1.7
+  screen_brightness_platform_interface: ^2.1.0
+  mime: any
+  path: any
+  collection: any
+  material_color_utilities: any
+  http2: any
+  screen_retriever: any
+  characters: any
+  # 上游自 66a191b01 (refa: cache manager #2266) 起改用自家 fork，
+  # 该 fork 复用 HTTP client、精简了 flutter_cache_manager 依赖。
+  # 上游 2.1.6 起切到 bggRGjQaUbCoE fork（新增 gaplessPlayback 参数）。
+  # 这里 pin 到具体 commit 而非上游的 ref: develop，保证可复现。
+  cached_network_image_ce:
+    git:
+      url: https://github.com/bggRGjQaUbCoE/flutter_cached_network_image_ce.git
+      path: cached_network_image
+      ref: 733d4aae9cadaafa9e16f20a6f6a3682c935de01
+  shared_preferences: ^2.2.1
+  package_info_plus: ">=4.0.0 <11.0.0"
+
+dependency_overrides:
+  # 强制第三方包里的 material_ui/cupertino_ui 也走本地 shim
+  material_ui:
+    path: packages/material_ui
+  cupertino_ui:
+    path: packages/cupertino_ui
+  meta: ^1.18.3 # 兼容液态玻璃
+  device_info_plus:
+    git:
+      url: https://gitcode.com/CPF-Flutter/flutter_plus_plugins.git
+      path: packages/device_info_plus/device_info_plus
+  flutter_inappwebview:
+    git:
+      url: "https://gitcode.com/CPF-Flutter/flutter_inappwebview.git"
+      path: "flutter_inappwebview"
+      # br_v6.1.5_ohos_dev 最新（含 PR #325「inappwebview 接入hcpp」）
+      ref: "eb931a01a060f80bad6175d8238300f7b855ea7e"
+  flutter_inappwebview_platform_interface:
+    git:
+      url: "https://gitcode.com/CPF-Flutter/flutter_inappwebview.git"
+      path: "flutter_inappwebview_platform_interface"
+      ref: "br_v6.1.5_ohos_dev"
+  # 该包在 flutter_inappwebview 的 pubspec 里以 `../flutter_inappwebview_ohos`
+  # 相对路径声明，跨 git 包时 pub 无法解析，必须显式指向同一仓库的同一 ref。
+  flutter_inappwebview_ohos:
+    git:
+      url: "https://gitcode.com/CPF-Flutter/flutter_inappwebview.git"
+      path: "flutter_inappwebview_ohos"
+      ref: "eb931a01a060f80bad6175d8238300f7b855ea7e"
+  # 新版 flutter_inappwebview 的 pubspec 把 windows 实现也指到了 git；
+  # 本项目不构建 windows，压回 hosted 版本即可解开版本约束。
+  flutter_inappwebview_windows: ^0.6.0
+  video_player: # 视频播放器.鸿蒙适配
+    git:
+      url: https://gitcode.com/openharmony-tpc/flutter_packages.git
+      path: packages/video_player/video_player
+      # 固定到锁文件中的 resolved-ref，避免 pub 每次都 fetch 上游分支
+      ref: 99532ec5923ef466776a60345537f308adc5ef25
+  url_launcher: # 打开链接.鸿蒙适配
+    git:
+      url: https://gitcode.com/hellozeronick/url_launcher.git
+      path: url_launcher
+      ref: main
+  path_provider: # 应用可用路径.鸿蒙适配
+    git:
+      url: "https://gitcode.com/openharmony-tpc/flutter_packages.git"
+      path: "packages/path_provider/path_provider"
+      ref: bddb2c981fcf826eaf19ed97f55113708aa55727
+  share_plus: # 分享.鸿蒙适配
+    git:
+      url: https://gitcode.com/CPF-Flutter/flutter_plus_plugins.git
+      path: packages/share_plus/share_plus
+      ref: br_share_plus-v10.1.1_ohos
+  path: ^1.9.1
+  mime: ^2.0.0
+  rxdart: ^0.28.0
+  media_kit:
+    git:
+      url: https://github.com/HelloZeroNick/media-kit.git
+      ref: feat-simple-video
+      path: ./media_kit
+  media_kit_libs_linux:
+    git:
+      url: https://github.com/cnoim/media-kit.git
+      ref: feat-ohos
+      path: ./libs/linux/media_kit_libs_linux
+  media_kit_libs_ios_video:
+    git:
+      url: https://github.com/cnoim/media-kit.git
+      ref: feat-ohos
+      path: ./libs/ios/media_kit_libs_ios_video
+  media_kit_libs_macos_video:
+    git:
+      url: https://github.com/cnoim/media-kit.git
+      ref: feat-ohos
+      path: ./libs/macos/media_kit_libs_macos_video
+  media_kit_libs_ohos:
+    git:
+      url: https://github.com/HelloZeroNick/media-kit.git
+      ref: feat-simple-video
+      path: ./libs/ohos/media_kit_libs_ohos
+  # media_kit_libs_android_video:
+  #   git:
+  #     url: https://github.com/cnoim/media-kit.git
+  #     path: ./libs/android/media_kit_libs_android_video
+  # media_kit_libs_windows_video:
+  #   git:
+  #     url: https://github.com/cnoim/media-kit.git
+  #     path: ./libs/windows/media_kit_libs_windows_video
+
+  # 上游指定的media_kit
+  media_kit_native_event_loop:
+    git:
+      url: https://github.com/My-Responsitories/media-kit.git
+      path: media_kit_native_event_loop
+      ref: version_1.2.5
+  media_kit_libs_android_video:
+    git:
+      url: https://github.com/My-Responsitories/media-kit.git
+      path: libs/android/media_kit_libs_android_video
+      ref: version_1.2.5
+  media_kit_libs_windows_video:
+    git:
+      url: https://github.com/My-Responsitories/media-kit.git
+      path: libs/windows/media_kit_libs_windows_video
+      ref: version_1.2.5
+  image_picker:
+    git:
+      url: https://gitcode.com/CPF-Flutter/flutter_packages.git
+      path: packages/image_picker/image_picker
+      ref: 881e0dbe8fbf67faf541574f93557f826f3ceb3e
+  win32: 5.5.3
+  js: 0.7.0
+  # image_cropper 鸿蒙化适配
+  image_cropper:
+    git:
+      url: https://gitcode.com/CPF-Flutter/fluttertpc_image_cropper.git
+      path: ./image_cropper
+      ref: br_v12.2.1_ohos_dev
+  shared_preferences:
+    git:
+      url: https://gitcode.com/CPF-Flutter/flutter_packages.git
+      path: packages/shared_preferences/shared_preferences
+      ref: 143d83e7669a359a1ab1ee6558c4a2e4f7f4c53f
+  package_info_plus:
+    git:
+      url: https://gitcode.com/CPF-Flutter/flutter_plus_plugins.git
+      path: packages/package_info_plus/package_info_plus
+      ref: package_info_plus-9.0.0-ohos-1.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  # The "flutter_lints" package below contains a set of recommended lints to
+  # encourage good coding practices. The lint set provided by the package is
+  # activated in the `analysis_options.yaml` file located at the root of your
+  # package. See that file for information about deactivating specific lint
+  # rules and activating additional ones.
+  flutter_lints: ^2.0.0
+  flutter_launcher_icons: ^0.14.4
+  # hive_generator: ^2.0.1
+  build_runner: ^2.10.3
+  flutter_native_splash: ^2.4.6
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  remove_alpha_ios: true
+  image_path: assets/images/logo/logo_2.png
+  image_path_android: assets/images/logo/logo_2.png
+  image_path_ios: assets/images/logo/logo.png
+  adaptive_icon_background: "#ffffff"
+  adaptive_icon_foreground: assets/images/logo/logo_2.png
+  adaptive_icon_monochrome: assets/images/logo/logo_2.png
+  macos:
+    generate: true
+    image_path: assets/images/logo/logo.png
+
+flutter_native_splash:
+  android_12:
+    color: "#ffffff"
+    color_dark: "#212121"
+  color: "#ffffff"
+  color_dark: "#212121"
+  image: assets/images/logo/logo_2.png
+  image_dark: assets/images/logo/logo_2.png
+
+# For information on the generic Dart part of this file, see the
+# following page: https://dart.dev/tools/pub/pubspec
+
+# The following section is specific to Flutter packages.
+flutter:
+  # The following line ensures that the Material Icons font is
+  # included with your application, so that you can use the icons in
+  # the material Icons class.
+  uses-material-design: true
+
+  # To add assets to your application, add an assets section, like this:
+  assets:
+    - path: assets/images/
+    - path: assets/images/logo/
+    - path: assets/images/logo/ico/
+      platforms: [windows]
+    - path: assets/images/logo/desktop/
+      platforms: [linux, macos]
+    - path: assets/images/live/
+    - path: assets/images/paycoins/
+    - path: assets/shaders/
+  # An image asset can refer to one or more resolution-specific "variants", see
+  # https://flutter.dev/assets-and-images/#resolution-aware
+
+  # For details regarding adding assets from package dependencies, see
+  # https://flutter.dev/assets-and-images/#from-packages
+
+  # To add custom fonts to your application, add a fonts section here,
+  # in this "flutter" section. Each entry in this list should have a
+  # "family" key with the font family name, and a "fonts" key with a
+  # list giving the asset and other descriptors for the font. For
+  # example:
+  fonts:
+    - family: digital_id_num
+      fonts:
+        - asset: assets/fonts/digital_id_num.ttf
+    - family: custom_icon
+      fonts:
+        - asset: assets/fonts/custom_icon.ttf
+  #   - family: Jura-Bold
+  #     fonts:
+  #       - asset: assets/fonts/Jura-Bold.ttf
+  #  - family: HarmonyOS_Sans
+  #    fonts:
+  #      - asset: assets/fonts/HarmonyOS_Sans_SC_w300.ttf
+  #        weight: 300
+  #      - asset: assets/fonts/HarmonyOS_Sans_SC_w400.ttf
+  #        weight: 400
+  #      - asset: assets/fonts/HarmonyOS_Sans_SC_w500.ttf
+  #        weight: 500
+  #      - asset: assets/fonts/HarmonyOS_Sans_SC_w600.ttf
+  #        weight: 600
+  #      - asset: assets/fonts/HarmonyOS_Sans_SC_w700.ttf
+  #        weight: 700
+  #      - asset: assets/fonts/HarmonyOS_Sans_SC_w800.ttf
+  #        weight: 800
+
+  # For details regarding fonts from package dependencies,
+  # see https://flutter.dev/custom-fonts/#from-packages

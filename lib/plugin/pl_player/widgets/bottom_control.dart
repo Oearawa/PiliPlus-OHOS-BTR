@@ -1,0 +1,161 @@
+import 'package:PiliPlus/common/widgets/progress_bar/audio_video_progress_bar.dart';
+import 'package:PiliPlus/common/widgets/progress_bar/segment_progress_bar.dart';
+import 'package:PiliPlus/pages/video/controller.dart';
+import 'package:PiliPlus/plugin/pl_player/controller.dart';
+import 'package:PiliPlus/plugin/pl_player/view/view.dart';
+import 'package:PiliPlus/utils/extension/theme_ext.dart';
+import 'package:PiliPlus/utils/feed_back.dart';
+import 'package:PiliPlus/utils/platform_utils.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:get/get.dart';
+
+class BottomControl extends StatelessWidget {
+  const BottomControl({
+    super.key,
+    required this.maxWidth,
+    required this.isFullScreen,
+    required this.animCtr,
+    required this.controller,
+    required this.buildBottomControl,
+    required this.videoDetailController,
+  });
+
+  final double maxWidth;
+  final bool isFullScreen;
+  final AnimationController animCtr;
+  final PlPlayerController controller;
+  final ValueGetter<Widget> buildBottomControl;
+  final VideoDetailController videoDetailController;
+
+  void onDragStart(ThumbDragDetails duration) {
+    feedBack();
+    controller.onSeekStart(duration.seconds);
+  }
+
+  void onDragUpdate(ThumbDragDetails duration) {
+    if (!controller.isFileSource && controller.showSeekPreview) {
+      controller.updatePreviewIndex(duration.seconds);
+      if (controller.hoverDx != null) {
+        controller.hoverDx = duration.localPosition.dx;
+      }
+    }
+    controller.seekPosition.value = duration.seconds;
+  }
+
+  void onSeek(int milliseconds) {
+    controller
+      ..hoverDx = null
+      ..position.value = milliseconds ~/ 1000
+      ..onSeekEnd()
+      ..seekTo(Duration(milliseconds: milliseconds));
+  }
+
+  void _onHover(double dx, int seconds) {
+    if (animCtr.isAnimating) return;
+    if (controller.isSeeking.rawValue) return;
+    controller
+      ..hoverDx = dx
+      ..seekPosition.value = seconds
+      ..updatePreviewIndex(seconds);
+  }
+
+  void _onExit() {
+    if (controller.isSeeking.rawValue || controller.hoverDx == null) {
+      return;
+    }
+    controller
+      ..hidePreview()
+      ..hideTaskControls();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = ColorScheme.of(context);
+    final primary = colorScheme.isLight
+        ? colorScheme.inversePrimary
+        : colorScheme.primary;
+    final thumbGlowColor = primary.withAlpha(80);
+    final bufferedBarColor = primary.withValues(alpha: 0.4);
+
+    final enableHover =
+        PlatformUtils.isDesktop &&
+        controller.showSeekPreview &&
+        !controller.isFileSource;
+
+    return Padding(
+      padding: const .symmetric(horizontal: 10, vertical: 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 0, 10, 7),
+            child: Obx(
+              () => Offstage(
+                offstage: !controller.showControls.value,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  alignment: Alignment.bottomCenter,
+                  children: [
+                    Obx(
+                      () => ProgressBar(
+                        progress: controller.progress,
+                        buffered: controller.buffered.value,
+                        total: controller.duration.value,
+                        progressBarColor: primary,
+                        baseBarColor: const Color(0x33FFFFFF),
+                        bufferedBarColor: bufferedBarColor,
+                        thumbColor: primary,
+                        thumbGlowColor: thumbGlowColor,
+                        barHeight: 3.5,
+                        thumbRadius: 7,
+                        thumbGlowRadius: 25,
+                        onDragStart: onDragStart,
+                        onDragUpdate: onDragUpdate,
+                        onSeek: onSeek,
+                        onHover: enableHover ? _onHover : null,
+                        onExit: enableHover ? _onExit : null,
+                      ),
+                    ),
+                    if (controller.enableBlock &&
+                        videoDetailController.segmentProgressList.isNotEmpty)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 5.25,
+                        child: SegmentProgressBar(
+                          segments: videoDetailController.segmentProgressList,
+                        ),
+                      ),
+                    if (controller.showViewPoints &&
+                        videoDetailController.viewPointList.isNotEmpty &&
+                        videoDetailController.showVP.value)
+                      Padding(
+                        padding: const .only(bottom: 8.75),
+                        child: ViewPointSegmentProgressBar(
+                          segments: videoDetailController.viewPointList,
+                          fontFamily: Theme.of(
+                            context,
+                          ).textTheme.bodyMedium?.fontFamily,
+                          fontWeight: Theme.of(
+                            context,
+                          ).textTheme.bodyMedium?.fontWeight,
+                          onSeek: PlatformUtils.isDesktop
+                              ? controller.seekTo
+                              : null,
+                        ),
+                      ),
+                    if (videoDetailController.showDmTrendChart.value)
+                      if (videoDetailController.dmTrend.value?.dataOrNull
+                          case final list?)
+                        buildDmChart(primary, list, videoDetailController, 4.5),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          buildBottomControl(),
+        ],
+      ),
+    );
+  }
+}
